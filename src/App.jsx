@@ -192,10 +192,10 @@ function calcMacros(meal, user) {
   }
 
   return {
-    cals:    proteinCals + c.cals + (v ? v.cals    : 0),
-    protein: proteinG    + c.protein + (v ? v.protein : 0),
-    carbs:   p.carbs     + c.carbs   + (v ? v.carbs   : 0),
-    fat:     proteinFat  + c.fat     + (v ? v.fat     : 0),
+    cals:    Math.round(proteinCals + c.cals + (v ? v.cals    : 0)),
+    protein: Math.round(proteinG    + c.protein + (v ? v.protein : 0)),
+    carbs:   Math.round(p.carbs     + c.carbs   + (v ? v.carbs   : 0)),
+    fat:     Math.round(proteinFat  + c.fat     + (v ? v.fat     : 0)),
   };
 }
 
@@ -206,19 +206,18 @@ function calcShelfLife(meal) {
   return Math.min(...[p?.shelfDays, c?.shelfDays, v?.shelfDays].filter(Boolean));
 }
 
-function calcRawWeights(users, days) {
+function calcRawWeights(users, _legacyDays) {
+  // Uses per-user days if available, falls back to passed-in days
   const totals = {};
   users.forEach(u => {
     if (!u.meal?.protein || !u.meal?.carb) return;
+    const userDays = Math.round(+(u.days || _legacyDays || 5));
+    const userMpd  = Math.round(+(u.mealsPerDay || 1));
     const p = PROTEINS.find(x => x.id === u.meal.protein);
     const c = CARBS.find(x => x.id === u.meal.carb);
     const v = u.meal.veggie ? VEGGIES.find(x => x.id === u.meal.veggie) : null;
-
-    // Scale protein raw amount to the user's actual cooked target
     const cookedNeeded = calcCookedProteinNeeded(u, u.meal.protein);
     const rawNeeded    = cookedToRaw(cookedNeeded, u.meal.protein);
-
-    // Protein (scaled), carb + veggie (standard serving)
     const entries = [
       [p.name, true,  rawNeeded],
       [c.name, false, c.rawPerServing],
@@ -226,7 +225,7 @@ function calcRawWeights(users, days) {
     ];
     entries.forEach(([key, isP, rawAmt]) => {
       if (!totals[key]) totals[key] = { g: 0, isProtein: isP };
-      totals[key].g += rawAmt * days;
+      totals[key].g += rawAmt * userDays * userMpd;
     });
   });
   return totals;
@@ -550,7 +549,7 @@ function UserSetup({ data, setData, onComplete }) {
   const [rf, setRf]       = useState({ days: data.round?.days || 5, mealsPerDay: data.round?.mealsPerDay || 1 });
 
   function blank() {
-    return { name:"", age:"", gender:"", macroMode:null, protein:"", carbs:"", fat:"", activity:"", goal:"", weight:"", proteinG:"", carbPct:"50", restrictions:["None"] };
+    return { name:"", age:"", gender:"", macroMode:null, protein:"", carbs:"", fat:"", activity:"", goal:"", weight:"", proteinG:"", carbPct:"50", restrictions:["None"], days:"5", mealsPerDay:"1" };
   }
   function up(k, v) { setF(p => ({ ...p, [k]: v })); }
 
@@ -561,7 +560,7 @@ function UserSetup({ data, setData, onComplete }) {
   const tdee = (f.gender && f.weight && f.age && f.activity)
     ? estimateTDEE(f.gender, f.weight, f.age, f.activity) : null;
 
-  const calGoalMap = { cut: tdee ? tdee-400 : null, maintain: tdee, bulk: tdee ? tdee+250 : null };
+  const calGoalMap = { cut: tdee ? Math.round(tdee-400) : null, maintain: tdee ? Math.round(tdee) : null, bulk: tdee ? Math.round(tdee+250) : null };
   const calGoal = f.goal ? calGoalMap[f.goal] : null;
 
   const pMin = f.gender && f.weight ? Math.round(+f.weight * (f.gender==="female" ? 0.75 : 0.85)) : 0;
@@ -587,7 +586,8 @@ function UserSetup({ data, setData, onComplete }) {
            protein:u.protein, carbs:u.carbs, fat:u.fat,
            activity:u.activity||"", goal:u.goal_raw||"", weight:u.weight||"",
            proteinG:u.proteinG||u.protein, carbPct:u.carbPct||"50",
-           restrictions:u.restrictions||["None"] });
+           restrictions:u.restrictions||["None"],
+           days:u.days||"5", mealsPerDay:u.mealsPerDay||"1" });
     setEditing(u); setPStep(0); setGStep(0); setView("form");
   }
 
@@ -600,7 +600,8 @@ function UserSetup({ data, setData, onComplete }) {
       cal2=String(calGoal); gl={cut:"Fat Loss",bulk:"Muscle Gain",maintain:"Maintenance"}[f.goal]||"Maintenance";
     }
     const u = { ...f, protein:p2, carbs:c2, fat:fa2, cals:cal2, goal:gl, goal_raw:f.goal,
-                tdee:tdee?String(tdee):"", id:editing?.id||String(Date.now()), meal:editing?.meal||initMeal() };
+                tdee:tdee?String(tdee):"", days:f.days||"5", mealsPerDay:f.mealsPerDay||"1",
+                id:editing?.id||String(Date.now()), meal:editing?.meal||initMeal() };
     const users = editing ? data.users.map(x=>x.id===u.id?u:x) : [...data.users,u];
     setData({ ...data, users }); setView("home");
   }
@@ -631,7 +632,7 @@ function UserSetup({ data, setData, onComplete }) {
         <div className="card">
           <div className="ct">Cycle Settings</div>
           <label className="lbl">Number of Days (max 7)</label>
-          <input className="inp" type="number" min={1} max={7} value={rf.days}
+          <input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" min={1} max={7} value={rf.days}
             onChange={e=>setRf({...rf,days:Math.min(7,parseInt(e.target.value)||1)})} />
           {rf.days>7&&<div className="al ar"><span className="ai">⚠️</span>Max 7 days for fridge storage safety.</div>}
           <label className="lbl">Meals Per Day</label>
@@ -643,10 +644,10 @@ function UserSetup({ data, setData, onComplete }) {
             ))}
           </div>
           <div style={{background:"rgba(255,77,0,.07)",border:"1px solid rgba(255,77,0,.25)",borderRadius:10,padding:"14px",marginTop:12}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>Total meals to prep</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>Default for new users</div>
             <div style={{fontFamily:"var(--fd)",fontSize:44,color:"var(--acc)",lineHeight:1}}>{total}</div>
             <div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>
-              {data.users.length} user{data.users.length!==1?"s":""} × {rf.days} day{rf.days!==1?"s":""} × {rf.mealsPerDay} meal{rf.mealsPerDay>1?"s":""}/day
+              {rf.days} day{rf.days!==1?"s":""} × {rf.mealsPerDay} meal{rf.mealsPerDay>1?"s":""}/day — overrideable per user
             </div>
           </div>
         </div>
@@ -713,7 +714,7 @@ function UserSetup({ data, setData, onComplete }) {
           <label className="lbl">Full Name</label>
           <input className="inp" placeholder="Enter name" value={f.name} onChange={e=>up("name",e.target.value)}/>
           <label className="lbl">Age</label>
-          <input className="inp" type="number" placeholder="e.g. 28" value={f.age} onChange={e=>up("age",e.target.value)}/>
+          <input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder="e.g. 28" value={f.age} onChange={e=>up("age",e.target.value)}/>
           <label className="lbl">Sex</label>
           <div style={{display:"flex",gap:10}}>
             {["male","female"].map(g=>(
@@ -723,7 +724,22 @@ function UserSetup({ data, setData, onComplete }) {
             ))}
           </div>
         </div>
-        <button className="btn bp" disabled={!f.name||!f.age||!f.gender} onClick={()=>setPStep(1)}>Next →</button>
+        <div className="card">
+          <div className="ct">Prep Cycle — {f.name || "This User"}</div>
+          <label className="lbl">Days to prep</label>
+          <input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" min={1} max={7} placeholder="e.g. 5" value={f.days} onChange={e=>up("days", e.target.value.replace(/[^0-9]/g,""))}/>
+          {(+f.days > 7) && <div className="al ar" style={{marginTop:-8,marginBottom:8}}><span className="ai">⚠️</span><span>Max 7 days recommended for fridge storage.</span></div>}
+          <label className="lbl">Meals per day</label>
+          <div className="pg">
+            {["1","2","3"].map(n=>(
+              <div key={n} className={`pill ${f.mealsPerDay===n?"on":""}`} onClick={()=>up("mealsPerDay",n)}>{n} meal{n!=="1"?"s":""}</div>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>
+            = <strong style={{color:"var(--acc)"}}>{(+f.days||0)*(+f.mealsPerDay||0)}</strong> total containers for {f.name||"this user"}
+          </div>
+        </div>
+        <button className="btn bp" disabled={!f.name||!f.age||!f.gender||!f.days||!f.mealsPerDay} onClick={()=>setPStep(1)}>Next →</button>
         <button className="btn bg" onClick={()=>setView("home")}>Cancel</button>
       </div>
     );
@@ -762,9 +778,9 @@ function UserSetup({ data, setData, onComplete }) {
         <div className="card">
           <div className="ct">Daily Targets</div>
           <div className="ig">
-            <div><label className="lbl">Protein (g)</label><input className="inp" type="number" placeholder="180" value={f.protein} onChange={e=>up("protein",e.target.value)}/></div>
-            <div><label className="lbl">Carbs (g)</label><input className="inp" type="number" placeholder="220" value={f.carbs} onChange={e=>up("carbs",e.target.value)}/></div>
-            <div><label className="lbl">Fat (g)</label><input className="inp" type="number" placeholder="65" value={f.fat} onChange={e=>up("fat",e.target.value)}/></div>
+            <div><label className="lbl">Protein (g)</label><input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder="180" value={f.protein} onChange={e=>up("protein",e.target.value)}/></div>
+            <div><label className="lbl">Carbs (g)</label><input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder="220" value={f.carbs} onChange={e=>up("carbs",e.target.value)}/></div>
+            <div><label className="lbl">Fat (g)</label><input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder="65" value={f.fat} onChange={e=>up("fat",e.target.value)}/></div>
           </div>
           {(f.protein||f.carbs||f.fat)&&(
             <div style={{background:"rgba(255,77,0,.07)",border:"1px solid rgba(255,77,0,.25)",borderRadius:8,padding:"14px"}}>
@@ -812,7 +828,7 @@ function UserSetup({ data, setData, onComplete }) {
           <div className="banner"><span>⚡</span><span>Enter current weight in pounds to calculate TDEE.</span></div>
           <div className="card">
             <label className="lbl">Current Weight (lbs)</label>
-            <input className="inp" type="number" placeholder="e.g. 175" value={f.weight} onChange={e=>up("weight",e.target.value)}/>
+            <input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder="e.g. 175" value={f.weight} onChange={e=>up("weight",e.target.value)}/>
             {f.weight&&tdee&&(
               <div style={{background:"rgba(255,77,0,.07)",border:"1px solid rgba(255,77,0,.25)",borderRadius:8,padding:"14px"}}>
                 <div style={{fontSize:11,color:"var(--muted)"}}>Estimated TDEE</div>
@@ -870,7 +886,7 @@ function UserSetup({ data, setData, onComplete }) {
               </div>
             </div>
             <label className="lbl">Protein (g/day)</label>
-            <input className="inp" type="number" placeholder={`${pMin}–${pMax}g`} value={f.proteinG} onChange={e=>up("proteinG",e.target.value)}/>
+            <input className="inp" type="number" inputMode="numeric" pattern="[0-9]*" placeholder={`${pMin}–${pMax}g`} value={f.proteinG} onChange={e=>up("proteinG",e.target.value)}/>
             {f.proteinG&&<div style={{fontSize:12,color:"var(--muted)"}}>{f.proteinG}g × 4 = <strong style={{color:"var(--txt2)"}}>{Math.round(+f.proteinG*4)} kcal</strong> from protein</div>}
           </div>
 
@@ -958,7 +974,7 @@ function UserSetup({ data, setData, onComplete }) {
             <div className="uav">{u.name?.[0]?.toUpperCase()||"?"}</div>
             <div className="ui">
               <div className="un">{u.name}</div>
-              <div className="usb">{u.goal}{u.cals?` · ${u.cals} kcal`:""}{u.protein?` · P:${u.protein}g`:""}</div>
+              <div className="usb">{u.goal}{u.cals?` · ${u.cals} kcal`:""}{u.protein?` · P:${u.protein}g`:""}{u.days?` · ${u.days}d/${u.mealsPerDay||1}m`:""}</div>
             </div>
             <button className="btn bg bsm" onClick={()=>startEdit(u)}>Edit</button>
           </div>
@@ -970,8 +986,13 @@ function UserSetup({ data, setData, onComplete }) {
         {data.round?(
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div>
-              <div style={{fontFamily:"var(--fd)",fontSize:32,color:"var(--acc)",lineHeight:1}}>{data.round.days} DAYS</div>
-              <div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>{data.round.mealsPerDay} meal{data.round.mealsPerDay>1?"s":""}/day · {data.round.days*data.round.mealsPerDay} total meals</div>
+              <div style={{fontFamily:"var(--fd)",fontSize:32,color:"var(--acc)",lineHeight:1}}>{data.round.days}D / {data.round.mealsPerDay}M</div>
+              <div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>default · set per-user in profiles</div>
+              {data.users.length>0 && (
+                <div style={{fontSize:11,color:"var(--grn)",marginTop:3}}>
+                  {data.users.map(u=>`${u.name}: ${u.days||data.round.days}d/${u.mealsPerDay||data.round.mealsPerDay}m`).join(" · ")}
+                </div>
+              )}
             </div>
             <span style={{color:"var(--muted)",fontSize:12,fontWeight:700}}>EDIT ›</span>
           </div>
@@ -1043,10 +1064,10 @@ function OtherMealsLookup({ user, savedOtherMeals, onSave, onSkip }) {
       const food = FOOD_DB_FLAT.find(f => f.id === id);
       if (!food) return acc;
       return {
-        cals:    +(acc.cals    + food.cals    * count).toFixed(1),
-        protein: +(acc.protein + food.protein * count).toFixed(1),
-        carbs:   +(acc.carbs   + food.carbs   * count).toFixed(1),
-        fat:     +(acc.fat     + food.fat     * count).toFixed(1),
+        cals:    Math.round(acc.cals    + food.cals    * count),
+        protein: Math.round(acc.protein + food.protein * count),
+        carbs:   Math.round(acc.carbs   + food.carbs   * count),
+        fat:     Math.round(acc.fat     + food.fat     * count),
       };
     }, { cals:0, protein:0, carbs:0, fat:0 });
   }
@@ -1055,10 +1076,10 @@ function OtherMealsLookup({ user, savedOtherMeals, onSave, onSkip }) {
     const b = mealSlots.breakfast ? slotTotals("breakfast") : { cals:0,protein:0,carbs:0,fat:0 };
     const d = mealSlots.dinner    ? slotTotals("dinner")    : { cals:0,protein:0,carbs:0,fat:0 };
     return {
-      cals:    +(b.cals    + d.cals).toFixed(1),
-      protein: +(b.protein + d.protein).toFixed(1),
-      carbs:   +(b.carbs   + d.carbs).toFixed(1),
-      fat:     +(b.fat     + d.fat).toFixed(1),
+      cals:    Math.round(b.cals    + d.cals),
+      protein: Math.round(b.protein + d.protein),
+      carbs:   Math.round(b.carbs   + d.carbs),
+      fat:     Math.round(b.fat     + d.fat),
     };
   }
 
@@ -1709,12 +1730,118 @@ function ShoppingOptions({ data, setData, onComplete }) {
               </div>
             </div>
           ))}
-          {meal.protein&&meal.carb&&<MR {...calcMacros(meal, user)}/>}
-          <button className="btn bp" onClick={nextUser}>
-            {activeUser<data.users.length-1
-              ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
-              : "✓ All Done — View Shopping List →"}
-          </button>
+
+          {/* Meal Summary + Delta Alerts */}
+          {meal.protein&&meal.carb&&(()=>{
+            const m   = calcMacros(meal, user);
+            const tgt = { cals: Math.round(+lunchTargets.cals||0), protein: Math.round(+lunchTargets.protein||0), carbs: Math.round(+lunchTargets.carbs||0), fat: Math.round(+lunchTargets.fat||0) };
+            const dCals    = m.cals    - tgt.cals;
+            const dProtein = m.protein - tgt.protein;
+            const dCarbs   = m.carbs   - tgt.carbs;
+            const dFat     = m.fat     - tgt.fat;
+            const THRESH   = 5; // grams / kcal tolerance before flagging
+
+            const proteinOk  = Math.abs(dProtein) <= THRESH;
+            const calsOk     = Math.abs(dCals)    <= 25;
+            const carbsOk    = Math.abs(dCarbs)   <= THRESH;
+            const fatOk      = Math.abs(dFat)     <= THRESH;
+            const allOk      = proteinOk && calsOk && carbsOk && fatOk;
+
+            const alertStyle = (ok, over) => ({
+              padding:"10px 14px", borderRadius:8, marginBottom:8,
+              fontWeight:700, fontSize:14,
+              background: ok ? "rgba(0,230,118,.1)" : over ? "rgba(255,23,68,.12)" : "rgba(255,234,0,.1)",
+              border: `1.5px solid ${ok ? "rgba(0,230,118,.4)" : over ? "rgba(255,23,68,.5)" : "rgba(255,234,0,.4)"}`,
+              color: ok ? "var(--grn)" : over ? "#ff6080" : "var(--ylw)",
+            });
+
+            return (
+              <div style={{marginTop:8}}>
+                <div style={{fontFamily:"var(--fd)",fontSize:20,letterSpacing:1,color:"var(--txt2)",marginBottom:10}}>
+                  MEAL SUMMARY — {user?.name}
+                </div>
+                <MR cals={m.cals} protein={m.protein} carbs={m.carbs} fat={m.fat}/>
+
+                {/* Priority 1: Protein */}
+                <div style={alertStyle(proteinOk, dProtein>0)}>
+                  {proteinOk
+                    ? `✅ PROTEIN ON TARGET — ${m.protein}g (goal: ${tgt.protein}g)`
+                    : dProtein > 0
+                      ? `🔴 YOU ARE OVER ON PROTEIN +${dProtein}g (${m.protein}g vs ${tgt.protein}g goal)`
+                      : `🟡 YOU ARE UNDER ON PROTEIN ${dProtein}g (${m.protein}g vs ${tgt.protein}g goal)`}
+                </div>
+
+                {/* Priority 2: Calories */}
+                <div style={alertStyle(calsOk, dCals>0)}>
+                  {calsOk
+                    ? `✅ CALORIES ON TARGET — ${m.cals} kcal (goal: ${tgt.cals})`
+                    : dCals > 0
+                      ? `🔴 YOU ARE OVER ON CALORIES +${dCals} kcal (${m.cals} vs ${tgt.cals} goal)`
+                      : `🟡 YOU ARE UNDER ON CALORIES ${dCals} kcal (${m.cals} vs ${tgt.cals} goal)`}
+                </div>
+
+                {/* Carbs */}
+                <div style={alertStyle(carbsOk, dCarbs>0)}>
+                  {carbsOk
+                    ? `✅ CARBS ON TARGET — ${m.carbs}g (goal: ${tgt.carbs}g)`
+                    : dCarbs > 0
+                      ? `🔴 YOU ARE OVER ON CARBS +${dCarbs}g (${m.carbs}g vs ${tgt.carbs}g goal)`
+                      : `🟡 YOU ARE UNDER ON CARBS ${dCarbs}g (${m.carbs}g vs ${tgt.carbs}g goal)`}
+                </div>
+
+                {/* Fat */}
+                <div style={alertStyle(fatOk, dFat>0)}>
+                  {fatOk
+                    ? `✅ FAT ON TARGET — ${m.fat}g (goal: ${tgt.fat}g)`
+                    : dFat > 0
+                      ? `🔴 YOU ARE OVER ON FAT +${dFat}g (${m.fat}g vs ${tgt.fat}g goal)`
+                      : `🟡 YOU ARE UNDER ON FAT ${dFat}g (${m.fat}g vs ${tgt.fat}g goal)`}
+                </div>
+
+                {!allOk && (
+                  <div style={{display:"flex",gap:8,marginTop:4,marginBottom:4}}>
+                    <button className="btn bp" style={{flex:1,marginTop:0,padding:"11px"}}
+                      onClick={nextUser}>
+                      ✅ Looks Good — Continue
+                    </button>
+                    <button className="btn bs" style={{flex:1,marginTop:0,padding:"11px"}}
+                      onClick={()=>setBStep(1)}>
+                      🔄 Adjust Meal
+                    </button>
+                  </div>
+                )}
+                {allOk && (
+                  <div className="al ag" style={{marginTop:4}}>
+                    <span className="ai">🎯</span>
+                    <span><strong>Perfect match!</strong> All macros are within target.</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {(!meal.protein||!meal.carb)&&null}
+          {(meal.protein&&meal.carb)&&null}
+
+          {!(meal.protein&&meal.carb) && (
+            <button className="btn bp" onClick={nextUser}>
+              {activeUser<data.users.length-1
+                ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
+                : "✓ All Done — View Shopping List →"}
+            </button>
+          )}
+          {(meal.protein&&meal.carb)&&(()=>{
+            const m   = calcMacros(meal, user);
+            const tgt = { cals:Math.round(+lunchTargets.cals||0), protein:Math.round(+lunchTargets.protein||0), carbs:Math.round(+lunchTargets.carbs||0), fat:Math.round(+lunchTargets.fat||0) };
+            const allOk = Math.abs(m.protein-tgt.protein)<=5 && Math.abs(m.cals-tgt.cals)<=25 && Math.abs(m.carbs-tgt.carbs)<=5 && Math.abs(m.fat-tgt.fat)<=5;
+            return allOk ? (
+              <button className="btn bp" onClick={nextUser}>
+                {activeUser<data.users.length-1
+                  ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
+                  : "✓ All Done — View Shopping List →"}
+              </button>
+            ) : null;
+          })()}
         </>
       )}
     </div>
@@ -1759,7 +1886,7 @@ function CookingOptions({ data, setData, onComplete }) {
       <div className="banner"><span>⚡</span><span>Select your equipment below to unlock cooking suggestions.</span></div>
       <div className="al ao">
         <span className="ai">📦</span>
-        <span><strong>Prep your containers now.</strong> You need {data.users.length*(data.round?.days||5)} Tupperware containers — one per person per day. Lay them out before cooking.</span>
+        <span><strong>Prep your containers now.</strong> You need {data.users.reduce((s,u)=>s+Math.round(+(u.days||data.round?.days||5))*Math.round(+(u.mealsPerDay||data.round?.mealsPerDay||1)),0)} Tupperware containers — one per person per meal. Lay them out before cooking.</span>
       </div>
       <div className="card">
         <div className="ct">Available Equipment — select all that apply</div>
@@ -1854,9 +1981,8 @@ function CookingOptions({ data, setData, onComplete }) {
   );
 
   if (step===3) {
-    const days = data.round?.days || 5;
-    const mealsPerDay = data.round?.mealsPerDay || 1;
-    const eatBy = new Date(); eatBy.setDate(eatBy.getDate() + (data.round?.days||5));
+    // days/mealsPerDay are per-user; compute per-ingredient totals inline using user's own values
+    const eatBy = new Date(); eatBy.setDate(eatBy.getDate() + 4); // conservative shelf life
 
     return (
     <div className="page" id="section-portioning">
@@ -1885,17 +2011,16 @@ function CookingOptions({ data, setData, onComplete }) {
         });
 
         // Total cooked for ALL meals (users × days × mealsPerDay)
-        const totalCookedG = userPortions.reduce((s, x) => s + x.cookedPerMeal * days * mealsPerDay, 0);
+        const totalCookedG = userPortions.reduce((s, x) => {
+          const ud = Math.round(+(x.user.days||5)); const um = Math.round(+(x.user.mealsPerDay||1));
+          return s + x.cookedPerMeal * ud * um;
+        }, 0);
         const totalCookedOz = gToOz(totalCookedG);
-
-        // Total raw needed
         const totalRawG = isProtein
-          ? userPortions.reduce((s, x) => s + cookedToRaw(x.cookedPerMeal, id) * days * mealsPerDay, 0)
-          : usersForIngr.length * item.rawPerServing * days * mealsPerDay;
+          ? userPortions.reduce((s, x) => { const ud=Math.round(+(x.user.days||5)); const um=Math.round(+(x.user.mealsPerDay||1)); return s+cookedToRaw(x.cookedPerMeal,id)*ud*um; }, 0)
+          : userPortions.reduce((s, x) => { const ud=Math.round(+(x.user.days||5)); const um=Math.round(+(x.user.mealsPerDay||1)); return s+item.rawPerServing*ud*um; }, 0);
         const totalRawOz = gToOz(totalRawG);
-
-        // Total containers = users × days × mealsPerDay
-        const totalContainers = usersForIngr.length * days * mealsPerDay;
+        const totalContainers = userPortions.reduce((s,x)=>s+Math.round(+(x.user.days||5))*Math.round(+(x.user.mealsPerDay||1)),0);
 
         return (
           <div key={id} className="card">
@@ -1905,51 +2030,52 @@ function CookingOptions({ data, setData, onComplete }) {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
               <div style={{background:"var(--surf3)",border:"1px solid var(--bdr2)",borderRadius:8,padding:"12px",textAlign:"center"}}>
                 <div style={{fontSize:10,color:"var(--muted)",letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>Total Raw — Buy</div>
-                <div style={{fontFamily:"var(--fd)",fontSize:24,color:"var(--acc)",lineHeight:1}}>{formatImperialWeight(totalRawG)}</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{Math.round(totalRawG)}g · {totalRawOz.toFixed(1)} oz</div>
+                <div style={{fontFamily:"var(--fd)",fontSize:24,color:"var(--acc)",lineHeight:1}}>{totalRawOz.toFixed(1)} oz</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{Math.round(totalRawG)}g</div>
               </div>
               <div style={{background:"var(--surf3)",border:"1px solid var(--bdr2)",borderRadius:8,padding:"12px",textAlign:"center"}}>
                 <div style={{fontSize:10,color:"var(--muted)",letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>Total Cooked — Weigh</div>
-                <div style={{fontFamily:"var(--fd)",fontSize:24,color:"var(--acc2)",lineHeight:1}}>{Math.round(totalCookedG)}g</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{totalCookedOz.toFixed(1)} oz · {totalContainers} containers</div>
+                <div style={{fontFamily:"var(--fd)",fontSize:24,color:"var(--acc2)",lineHeight:1}}>{totalCookedOz.toFixed(1)} oz</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{Math.round(totalCookedG)}g · {totalContainers} containers</div>
               </div>
             </div>
 
             {/* Per-container breakdown — one row per user per meal */}
             <div style={{fontSize:11,color:"var(--muted)",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>
-              {totalContainers} Containers — {usersForIngr.length} user{usersForIngr.length>1?"s":""} × {days} day{days>1?"s":""} × {mealsPerDay} meal{mealsPerDay>1?"/day":""}
+              {totalContainers} Containers total — each user uses their own day count
             </div>
             <table className="pt2">
               <thead>
                 <tr>
                   <th>Container</th>
                   <th>User</th>
-                  <th>Grams</th>
                   <th>Ounces</th>
+                  <th>Grams</th>
                   {isProtein && <th>Protein</th>}
                 </tr>
               </thead>
               <tbody>
-                {usersForIngr.flatMap((u, ui) =>
-                  Array.from({ length: days * mealsPerDay }).map((_, containerIdx) => {
+                {usersForIngr.flatMap((u, ui) => {
+                  const ud = Math.round(+(u.days||5)); const um = Math.round(+(u.mealsPerDay||1));
+                  return Array.from({ length: ud * um }).map((_, containerIdx) => {
                     const portion = userPortions.find(x => x.user.id === u.id);
                     const cookedG = portion?.cookedPerMeal || 0;
                     const oz = gToOz(cookedG);
-                    const dayNum = Math.floor(containerIdx / mealsPerDay) + 1;
-                    const mealNum = mealsPerDay > 1 ? (containerIdx % mealsPerDay) + 1 : null;
+                    const dayNum = Math.floor(containerIdx / um) + 1;
+                    const mealNum = um > 1 ? (containerIdx % um) + 1 : null;
                     return (
                       <tr key={`${u.id}-${containerIdx}`} style={{opacity: containerIdx===0?1:0.7}}>
                         <td style={{color:"var(--muted)",fontSize:11}}>
                           Day {dayNum}{mealNum ? `, M${mealNum}` : ""}
                         </td>
                         <td style={{color:"#fff",fontWeight:600}}>{u.name}</td>
-                        <td><span className="pv">{cookedG}g</span></td>
                         <td><span className="pv2">{oz.toFixed(1)}</span><span className="pu">oz</span></td>
+                        <td><span className="pv">{cookedG}g</span></td>
                         {isProtein && <td><span style={{color:"var(--grn)",fontFamily:"var(--fd)",fontSize:16}}>{portion?.scaledProtein}g</span><span className="pu">P</span></td>}
                       </tr>
                     );
-                  })
-                )}
+                  });
+                })}
               </tbody>
             </table>
           </div>
