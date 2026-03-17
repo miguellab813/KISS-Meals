@@ -461,51 +461,155 @@ const S = `
 
 const EXPORT_DATE = () => new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
-async function triggerExport(sectionId, title) {
-  // Inject a print header
-  const header = document.createElement('div');
-  header.className = 'print-header';
-  header.id = '__kiss_print_hdr';
-  header.innerHTML = `
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:2px;color:#c93a00">KISSS LUNCHES</div>
-    <div style="text-align:right;font-size:12px;color:#555">
-      <div style="font-weight:700">${title}</div>
-      <div>Generated ${EXPORT_DATE()}</div>
-    </div>`;
-  const target = sectionId ? document.getElementById(sectionId) : document.body;
-  if (target) target.prepend(header);
+// PDF colour palette
+const PDF_BG    = '#f7f7f2';
+const PDF_TEXT  = '#111111';
+const PDF_BLUE  = '#1a4a8a';
+const PDF_MUTED = '#444455';
+const PDF_BORDER= '#cccccc';
 
-  // Try Web Share API first (native iOS/Android share sheet)
-  if (navigator.share) {
-    try {
-      // Build a blob from the section HTML for sharing as file
-      // For mobile, just share text summary + trigger print as fallback
-      await navigator.share({
-        title: `KISSS Lunches — ${title}`,
-        text: `KISSS Lunches prep plan — ${title} — Generated ${EXPORT_DATE()}`,
-      });
-      setTimeout(() => header.remove(), 500);
-      return;
-    } catch (e) {
-      // User cancelled or share failed — fall through to print
-    }
-  }
-
-  // Fallback: browser print dialog (Save as PDF on all platforms)
-  window.print();
-  setTimeout(() => header.remove(), 800);
+function buildExportHTML(cardsHTML, title, data) {
+  const date     = EXPORT_DATE();
+  const users    = data?.users || [];
+  const userLine = users.length ? users.map(u=>`${u.name}${u.days?' · '+u.days+'d':'​'}`).join('  |  ') : '';
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
+<title>KISSS LUNCHES — ${title}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:${PDF_BG};color:${PDF_TEXT};font-size:13px;line-height:1.6;padding:32px 28px}
+.doc-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${PDF_BLUE};padding-bottom:14px;margin-bottom:24px}
+.doc-logo{font-family:Arial Black,sans-serif;font-size:26px;font-weight:900;color:${PDF_BLUE};letter-spacing:2px}
+.doc-meta{text-align:right;font-size:11px;color:${PDF_MUTED};line-height:1.7}
+.doc-meta .stitle{font-size:15px;font-weight:700;color:${PDF_TEXT}}
+h2{font-size:16px;font-weight:700;color:${PDF_BLUE};border-bottom:1.5px solid ${PDF_BLUE};padding-bottom:6px;margin:20px 0 12px}
+.card{background:#fff;border:1px solid ${PDF_BORDER};border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid}
+*{color:${PDF_TEXT}!important;background-color:transparent!important}
+.card{background:#fff!important}
+body{background:${PDF_BG}!important}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${PDF_MUTED}!important;padding:6px 0;text-align:left;border-bottom:1.5px solid ${PDF_BORDER}}
+td{padding:8px 0;font-size:12px;border-bottom:1px solid ${PDF_BORDER}}
+tr:last-child td{border-bottom:none}
+.lp{background:#fff!important;border:2px dashed #999!important;border-radius:8px;padding:12px 14px;margin-bottom:8px}
+.al,.ar,.ag,.ao,.ay{background:#eef2fa!important;border:1px solid #c0cce8!important;border-radius:6px;padding:10px 12px;margin-bottom:8px}
+.inb{background:#f0f4fb!important;border-left:3px solid ${PDF_BLUE};border-radius:6px;padding:12px;margin-top:8px}
+.ich{display:inline-block;background:#dde6f5!important;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:700;margin-right:6px}
+.doc-footer{margin-top:32px;border-top:1px solid ${PDF_BORDER};padding-top:10px;font-size:10px;color:${PDF_MUTED}!important;text-align:center}
+</style></head><body>
+<div class="doc-header">
+  <div class="doc-logo">KISSS LUNCHES</div>
+  <div class="doc-meta">
+    <div class="stitle">${title}</div>
+    <div>${date}</div>
+    ${userLine ? `<div style="margin-top:4px">${userLine}</div>` : ''}
+  </div>
+</div>
+${cardsHTML}
+<div class="doc-footer">KISSS LUNCHES · ${date} · Keep It Simple, Stay Shredded</div>
+</body></html>`;
 }
 
-// Export bar at TOP of each section — compact single line
-function ExportBar({ sectionId, label, showFull, onFullExport }) {
+function extractCardsHTML(sectionId, sectionLabel) {
+  const el = document.getElementById(sectionId);
+  if (!el) return '';
+  let html = sectionLabel ? `<h2>${sectionLabel}</h2>` : '';
+  el.querySelectorAll('.card').forEach(card => {
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll('.no-print,.btn,.btn-export,.export-bar,.pg,.banner,.stps,.or,.nt-dot').forEach(x=>x.remove());
+    html += `<div class="card">${clone.innerHTML}</div>`;
+  });
+  return html;
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function renderHTMLToPDF(htmlContent, filename) {
+  // Load libraries
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+
+  // Render in hidden iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:820px;height:5000px;border:none;visibility:hidden';
+  document.body.appendChild(iframe);
+  const iDoc = iframe.contentDocument;
+  iDoc.open(); iDoc.write(htmlContent); iDoc.close();
+  await new Promise(r => setTimeout(r, 900));
+
+  const canvas = await iframe.contentWindow.html2canvas(iDoc.body, {
+    scale: 1.8, useCORS: true, backgroundColor: '#f7f7f2',
+    windowWidth: 820, logging: false,
+  });
+  iframe.remove();
+
+  const { jsPDF } = window.jspdf;
+  const pdf  = new jsPDF({ orientation:'portrait', unit:'pt', format:'a4' });
+  const pw   = pdf.internal.pageSize.getWidth();
+  const ph   = pdf.internal.pageSize.getHeight();
+  const imgH = (canvas.height / canvas.width) * pw;
+  let posY = 0, remaining = imgH;
+  const imgData = canvas.toDataURL('image/jpeg', 0.93);
+  while (remaining > 0) {
+    pdf.addImage(imgData, 'JPEG', 0, -posY, pw, imgH);
+    remaining -= ph; posY += ph;
+    if (remaining > 0) pdf.addPage();
+  }
+
+  const blob = pdf.output('blob');
+  const file = new File([blob], filename, { type:'application/pdf' });
+
+  if (navigator.canShare && navigator.canShare({ files:[file] })) {
+    await navigator.share({ files:[file], title:'KISSS LUNCHES' });
+  } else {
+    const url = URL.createObjectURL(blob);
+    const a   = Object.assign(document.createElement('a'), { href:url, download:filename });
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+}
+
+async function triggerExport(sectionId, label, data) {
+  const cardsHTML = extractCardsHTML(sectionId, label);
+  const html = buildExportHTML(cardsHTML, label, data);
+  const fname = `KISSS-${label.replace(/[^a-z0-9]/gi,'-')}-${new Date().toISOString().slice(0,10)}.pdf`;
+  await renderHTMLToPDF(html, fname);
+}
+
+async function triggerFullExport(data) {
+  const sections = [
+    { id:'section-shopping',   label:'🛒 Shopping List' },
+    { id:'section-cooking',    label:'🍳 Cooking Instructions' },
+    { id:'section-portioning', label:'⚖️ Portioning Guide' },
+    { id:'section-storage',    label:'📦 Storage & Tips' },
+  ];
+  let all = '';
+  sections.forEach(({ id, label }) => { all += extractCardsHTML(id, label); });
+  const html  = buildExportHTML(all, 'Full Prep Cycle Export', data);
+  const fname = `KISSS-Full-Cycle-${new Date().toISOString().slice(0,10)}.pdf`;
+  await renderHTMLToPDF(html, fname);
+}
+
+function ExportBar({ sectionId, label, showFull, onFullExport, data }) {
+  const [busy, setBusy] = React.useState(false);
+  const run = async fn => { setBusy(true); try { await fn(); } catch(e){ console.error(e); } finally { setBusy(false); } };
   return (
     <div className="export-bar no-print" style={{marginBottom:16,marginTop:0}}>
-      <button className="btn-export" onClick={()=>triggerExport(sectionId, label)}>
-        📤 Export / Save PDF
+      <button className="btn-export" disabled={busy}
+        onClick={()=>run(()=>triggerExport(sectionId, label, data))}>
+        {busy?'⏳ Generating...':'📄 Save PDF'}
       </button>
-      {showFull && (
-        <button className="btn-export full" onClick={onFullExport}>
-          📦 Full Cycle Export
+      {showFull&&(
+        <button className="btn-export full" disabled={busy}
+          onClick={()=>run(()=>triggerFullExport(data))}>
+          {busy?'⏳ Building...':'📦 Full Cycle PDF'}
         </button>
       )}
     </div>
@@ -954,7 +1058,7 @@ function UserSetup({ data, setData, onComplete }) {
     <div className="page" id="section-setup">
       <div className="pt">USER <span>SETUP</span></div>
       <div className="ps">Add user profiles and configure your prep cycle before continuing.</div>
-      <ExportBar sectionId="section-setup" label="User Setup" />
+      
 
       {data.users.length===0&&(
         <div className="banner"><span>⚡</span><span>Add at least one user profile to get started.</span></div>
@@ -1458,7 +1562,7 @@ function ShoppingOptions({ data, setData, onComplete }) {
       <div className="page" id="section-shopping">
         <div className="pt">SHOPPING <span>LIST</span></div>
         <div className="ps">Raw amounts for {data.round?.days} days · {data.users.length} user{data.users.length>1?"s":""}. All combined.</div>
-        <ExportBar sectionId="section-shopping" label="Shopping List" />
+        <ExportBar sectionId="section-shopping" label="Shopping List" data={data} />
 
         {hasDeductions && (
           <div className="al ag">
@@ -1940,7 +2044,7 @@ function CookingOptions({ data, setData, onComplete }) {
     <div className="page" id="section-cooking">
       <div className="pt">COOKING <span>GUIDE</span></div>
       <div className="ps">Select your method per ingredient. ★ = recommended for that ingredient.</div>
-      <ExportBar sectionId="section-cooking" label="Cooking Instructions" />
+      <ExportBar sectionId="section-cooking" label="Cooking Instructions" data={data} />
       {ingr.map(id=>{
         const avail   = equip.filter(e => COOKING_INSTRUCTIONS[id]?.[e]);
         const sug     = SUGGESTED_METHOD[id];
@@ -1988,7 +2092,7 @@ function CookingOptions({ data, setData, onComplete }) {
     <div className="page" id="section-portioning">
       <div className="pt">PORTIONING <span>GUIDE</span></div>
       <div className="ps">Full group totals, per-container weights, and container list for all {data.users.length} user{data.users.length>1?"s":""}.</div>
-      <ExportBar sectionId="section-portioning" label="Portioning Guide" />
+      <ExportBar sectionId="section-portioning" label="Portioning Guide" data={data} />
       <div className="al ao">
         <span className="ai">⚖️</span>
         <span><strong>Use a kitchen scale.</strong> Weigh your total cooked batch, then use the per-container weights below to divide into each Tupperware.</span>
@@ -2156,7 +2260,7 @@ function StorageOptions({ data }) {
     <div className="page" id="section-storage">
       <div className="pt">STORAGE <span>& TIPS</span></div>
       <div className="ps">How to store, reheat, and enjoy your prepped meals.</div>
-      <ExportBar sectionId="section-storage" label="Storage &amp; Tips" showFull={true} onFullExport={()=>triggerFullExport(data)} />
+      <ExportBar sectionId="section-storage" label="Storage &amp; Tips" showFull={true} onFullExport={()=>triggerFullExport(data)} data={data} />
 
       {days>shelf?(
         <div className="al ar"><span className="ai">⛔</span>
@@ -2245,108 +2349,6 @@ function StorageOptions({ data }) {
 
 // ─── FULL EXPORT ─────────────────────────────────────────────────────────────
 
-function triggerFullExport(data) {
-  // Build a temporary full-page print view with all 3 sections
-  const existing = document.getElementById('__kiss_full_export');
-  if (existing) existing.remove();
-
-  const el = document.createElement('div');
-  el.id = '__kiss_full_export';
-  el.style.cssText = 'position:fixed;top:0;left:0;width:100%;background:#fff;color:#000;z-index:9999;overflow:auto;padding:20px;font-family:Arial,sans-serif;display:none';
-
-  const date = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-  const users = data.users || [];
-  const round = data.round;
-
-  // Build content string
-  let html = `
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #c93a00;padding-bottom:12px;margin-bottom:20px">
-      <div style="font-family:Arial Black,sans-serif;font-size:28px;font-weight:900;color:#c93a00;letter-spacing:2px">K.I.S.S. LUNCHES</div>
-      <div style="text-align:right;font-size:12px;color:#555">
-        <div style="font-weight:700;font-size:14px">Full Prep Export</div>
-        <div>Generated ${date}</div>
-        ${round ? `<div>${users.length} user${users.length!==1?'s':''} · ${round.days} days · ${round.mealsPerDay} meal${round.mealsPerDay>1?'s':''}/day</div>` : ''}
-      </div>
-    </div>
-  `;
-
-  // Section 1: Shopping List
-  const shopEl = document.getElementById('section-shopping');
-  if (shopEl) {
-    html += `<div style="page-break-before:always"><h2 style="color:#c93a00;border-bottom:2px solid #c93a00;padding-bottom:6px;margin-bottom:14px;font-size:20px">🛒 Shopping List</h2>`;
-    const cards = shopEl.querySelectorAll('.card');
-    cards.forEach(c => {
-      const clone = c.cloneNode(true);
-      clone.querySelectorAll('.no-print,.btn,.btn-export,.export-bar').forEach(b=>b.remove());
-      clone.style.cssText = 'background:#f9f9f9;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px;page-break-inside:avoid';
-      html += clone.outerHTML;
-    });
-    html += '</div>';
-  }
-
-  // Section 2: Cooking Guide
-  const cookEl = document.getElementById('section-cooking');
-  if (cookEl) {
-    html += `<div style="page-break-before:always"><h2 style="color:#c93a00;border-bottom:2px solid #c93a00;padding-bottom:6px;margin-bottom:14px;font-size:20px;margin-top:24px">🍳 Cooking Instructions</h2>`;
-    const cards = cookEl.querySelectorAll('.card');
-    cards.forEach(c => {
-      const clone = c.cloneNode(true);
-      clone.querySelectorAll('.no-print,.btn,.btn-export,.export-bar,.pg').forEach(b=>b.remove());
-      clone.style.cssText = 'background:#f9f9f9;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px;page-break-inside:avoid';
-      html += clone.outerHTML;
-    });
-    html += '</div>';
-  }
-
-  // Section 3: Portioning
-  const portEl = document.getElementById('section-portioning');
-  if (portEl) {
-    html += `<div style="page-break-before:always"><h2 style="color:#c93a00;border-bottom:2px solid #c93a00;padding-bottom:6px;margin-bottom:14px;font-size:20px;margin-top:24px">⚖️ Portioning Guide</h2>`;
-    const cards = portEl.querySelectorAll('.card');
-    cards.forEach(c => {
-      const clone = c.cloneNode(true);
-      clone.querySelectorAll('.no-print,.btn,.btn-export,.export-bar').forEach(b=>b.remove());
-      clone.style.cssText = 'background:#f9f9f9;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px;page-break-inside:avoid';
-      html += clone.outerHTML;
-    });
-    html += '</div>';
-  }
-
-  // Section 4: Storage
-  const storEl = document.getElementById('section-storage');
-  if (storEl) {
-    html += `<div style="page-break-before:always"><h2 style="color:#c93a00;border-bottom:2px solid #c93a00;padding-bottom:6px;margin-bottom:14px;font-size:20px;margin-top:24px">📦 Storage & Tips</h2>`;
-    const cards = storEl.querySelectorAll('.card');
-    cards.forEach(c => {
-      const clone = c.cloneNode(true);
-      clone.querySelectorAll('.no-print,.btn,.btn-export,.export-bar').forEach(b=>b.remove());
-      clone.style.cssText = 'background:#f9f9f9;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px;page-break-inside:avoid';
-      html += clone.outerHTML;
-    });
-    html += '</div>';
-  }
-
-  el.innerHTML = html;
-  document.body.appendChild(el);
-
-  const style = document.createElement('style');
-  style.id = '__kiss_print_style';
-  style.textContent = `@media print { body > *:not(#__kiss_full_export){display:none!important} #__kiss_full_export{display:block!important;position:static!important} }`;
-  document.head.appendChild(style);
-  el.style.display = 'block';
-
-  // Try share first, fall back to print
-  const tryShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'KISSS Lunches — Full Prep Cycle', text: `KISSS Lunches full prep cycle export — Generated ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}` });
-        el.remove(); style.remove(); return;
-      } catch(e) {}
-    }
-    setTimeout(() => { window.print(); setTimeout(() => { el.remove(); style.remove(); }, 800); }, 200);
-  };
-  tryShare();
-}
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 
