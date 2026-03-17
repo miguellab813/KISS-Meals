@@ -205,6 +205,81 @@ function calcShelfLife(meal) {
   const v = meal.veggie ? VEGGIES.find(x => x.id === meal.veggie) : null;
   return Math.min(...[p?.shelfDays, c?.shelfDays, v?.shelfDays].filter(Boolean));
 }
+// ── AUTO-OPTIMIZE meal to hit macro targets ──────────────────────────────────
+// Priority: 1) protein (exact), 2) calories (scale carb), 3) report carb/fat result
+// Returns { proteinCookedG, carbCookedG, veggieCookedG, carbRawG, macros }
+function calcOptimalMeal(meal, user, lunchTargets) {
+  const p = PROTEINS.find(x => x.id === meal.protein);
+  const c = CARBS.find(x => x.id === meal.carb);
+  const v = meal.veggie ? VEGGIES.find(x => x.id === meal.veggie) : null;
+  if (!p || !c) return null;
+
+  // STEP 1: Lock protein to hit protein target exactly
+  const proteinCookedG = calcCookedProteinNeeded(user, meal.protein);
+  const proteinRawG    = cookedToRaw(proteinCookedG, meal.protein);
+  const proteinScale   = proteinCookedG / p.cookedPerServing;
+
+  const proteinMacros = {
+    cals:    Math.round(p.cals    * proteinScale),
+    protein: Math.round(p.protein * proteinScale),
+    carbs:   Math.round(p.carbs   * proteinScale),
+    fat:     Math.round(p.fat     * proteinScale),
+  };
+
+  // STEP 2: Veggie is fixed (optional, doesn't change)
+  const veggieCookedG  = v ? v.cookedPerServing : 0;
+  const veggieMacros   = v ? { cals: v.cals, protein: v.protein, carbs: v.carbs, fat: v.fat } : { cals:0, protein:0, carbs:0, fat:0 };
+
+  // STEP 3: Calories remaining for carb after protein + veggie
+  const tgtCals    = Math.round(+lunchTargets.cals    || 0);
+  const tgtProtein = Math.round(+lunchTargets.protein || 0);
+
+  const calsUsedSoFar  = proteinMacros.cals + veggieMacros.cals;
+  const calsForCarb    = Math.max(0, tgtCals - calsUsedSoFar);
+
+  // Scale carb serving to fill remaining calorie budget
+  // Each gram of cooked carb delivers c.cals/c.cookedPerServing kcal
+  const calsPerGramCarb = c.cals / c.cookedPerServing;
+  let carbCookedG = calsForCarb > 0 && calsPerGramCarb > 0
+    ? Math.round(calsForCarb / calsPerGramCarb)
+    : c.cookedPerServing;
+
+  // Floor at minimum 1 serving, cap at 3x serving (don't go crazy)
+  carbCookedG = Math.max(c.cookedPerServing, Math.min(c.cookedPerServing * 3, carbCookedG));
+
+  // For raw carb weight: rice/oats expand when cooked (raw is lighter), potatoes shrink slightly
+  // Use the rawPerServing : cookedPerServing ratio from the data
+  const carbScale   = carbCookedG / c.cookedPerServing;
+  const carbRawG    = Math.round(c.rawPerServing * carbScale);
+
+  const carbMacros = {
+    cals:    Math.round(c.cals    * carbScale),
+    protein: Math.round(c.protein * carbScale),
+    carbs:   Math.round(c.carbs   * carbScale),
+    fat:     Math.round(c.fat     * carbScale),
+  };
+
+  const totalMacros = {
+    cals:    proteinMacros.cals    + carbMacros.cals    + veggieMacros.cals,
+    protein: proteinMacros.protein + carbMacros.protein + veggieMacros.protein,
+    carbs:   proteinMacros.carbs   + carbMacros.carbs   + veggieMacros.carbs,
+    fat:     proteinMacros.fat     + carbMacros.fat     + veggieMacros.fat,
+  };
+
+  return {
+    proteinCookedG,
+    proteinRawG,
+    carbCookedG,
+    carbRawG,
+    veggieCookedG,
+    macros: totalMacros,
+    proteinMacros,
+    carbMacros,
+    veggieMacros,
+  };
+}
+
+
 
 function calcRawWeights(users, _legacyDays) {
   // Uses per-user days if available, falls back to passed-in days
@@ -216,10 +291,17 @@ function calcRawWeights(users, _legacyDays) {
     const p = PROTEINS.find(x => x.id === u.meal.protein);
     const c = CARBS.find(x => x.id === u.meal.carb);
     const v = u.meal.veggie ? VEGGIES.find(x => x.id === u.meal.veggie) : null;
-    const cookedNeeded = calcCookedProteinNeeded(u, u.meal.protein);
-    const rawNeeded    = cookedToRaw(cookedNeeded, u.meal.protein);
-    const entries = [
-      [p.name, true,  rawNeeded],
+    // Use lunchTargets so carb is scaled to fill remaining calories
+    const lunchTargets = u.otherMeals
+      ? { cals: +u.otherMeals.cals||0, protein: +u.otherMeals.protein||0, carbs: +u.otherMeals.carbs||0, fat: +u.otherMeals.fat||0 }
+      : { cals: +u.cals||0, protein: +u.protein||0, carbs: +u.carbs||0, fat: +u.fat||0 };
+    const opt = calcOptimalMeal(u.meal, u, lunchTargets);
+    const entries = opt ? [
+      [p.name, true,  opt.proteinRawG],
+      [c.name, false, opt.carbRawG],
+      ...(v ? [[v.name, false, v.rawPerServing]] : []),
+    ] : [
+      [p.name, true,  cookedToRaw(calcCookedProteinNeeded(u, u.meal.protein), u.meal.protein)],
       [c.name, false, c.rawPerServing],
       ...(v ? [[v.name, false, v.rawPerServing]] : []),
     ];
@@ -1788,31 +1870,7 @@ function ShoppingOptions({ data, setData, onComplete }) {
           {meal.protein&&meal.carb&&(
             <>
               <MR {...calcMacros(meal, user)}/>
-              {/* Vs lunch target comparison */}
-              {user?.otherMeals && mealMacros && (
-                <div className="card" style={{marginTop:4}}>
-                  <div className="ct">Lunch vs Target</div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
-                    {[
-                      {l:"Kcal",  meal:mealMacros.cals,    tgt:lunchTargets.cals},
-                      {l:"Prot",  meal:mealMacros.protein,  tgt:lunchTargets.protein},
-                      {l:"Carbs", meal:mealMacros.carbs,    tgt:lunchTargets.carbs},
-                      {l:"Fat",   meal:mealMacros.fat,      tgt:lunchTargets.fat},
-                    ].map(({l,meal:mv,tgt})=>{
-                      const diff = mv - tgt;
-                      const col  = Math.abs(diff)<=5?"var(--grn)":diff>0?"var(--acc)":"var(--ylw)";
-                      return (
-                        <div key={l} style={{background:"var(--surf3)",borderRadius:8,padding:"8px",textAlign:"center"}}>
-                          <div style={{fontSize:9,color:"var(--muted)",letterSpacing:1,textTransform:"uppercase"}}>{l}</div>
-                          <div style={{fontFamily:"var(--fd)",fontSize:18,color:col,lineHeight:1.2}}>{mv}</div>
-                          <div style={{fontSize:10,color:"var(--muted)"}}>tgt {tgt}</div>
-                          <div style={{fontSize:10,color:col,fontWeight:700}}>{diff>0?"+":""}{diff}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+
             </>
           )}
           <button className="btn bp" disabled={!meal.carb} onClick={()=>setBStep(3)}>Next — Add Veggie →</button>
@@ -1835,117 +1893,76 @@ function ShoppingOptions({ data, setData, onComplete }) {
             </div>
           ))}
 
-          {/* Meal Summary + Delta Alerts */}
+          {/* Optimized Meal Summary — auto-calculated, no manual adjustments needed */}
           {meal.protein&&meal.carb&&(()=>{
-            const m   = calcMacros(meal, user);
-            const tgt = { cals: Math.round(+lunchTargets.cals||0), protein: Math.round(+lunchTargets.protein||0), carbs: Math.round(+lunchTargets.carbs||0), fat: Math.round(+lunchTargets.fat||0) };
-            const dCals    = m.cals    - tgt.cals;
-            const dProtein = m.protein - tgt.protein;
-            const dCarbs   = m.carbs   - tgt.carbs;
-            const dFat     = m.fat     - tgt.fat;
-            const THRESH   = 5; // grams / kcal tolerance before flagging
-
-            const proteinOk  = Math.abs(dProtein) <= THRESH;
-            const calsOk     = Math.abs(dCals)    <= 25;
-            const carbsOk    = Math.abs(dCarbs)   <= THRESH;
-            const fatOk      = Math.abs(dFat)     <= THRESH;
-            const allOk      = proteinOk && calsOk && carbsOk && fatOk;
-
-            const alertStyle = (ok, over) => ({
-              padding:"10px 14px", borderRadius:8, marginBottom:8,
-              fontWeight:700, fontSize:14,
-              background: ok ? "rgba(0,230,118,.1)" : over ? "rgba(255,23,68,.12)" : "rgba(255,234,0,.1)",
-              border: `1.5px solid ${ok ? "rgba(0,230,118,.4)" : over ? "rgba(255,23,68,.5)" : "rgba(255,234,0,.4)"}`,
-              color: ok ? "var(--grn)" : over ? "#ff6080" : "var(--ylw)",
-            });
+            const opt = calcOptimalMeal(meal, user, lunchTargets);
+            if (!opt) return null;
+            const m   = opt.macros;
+            const tgt = { cals: Math.round(+lunchTargets.cals||0), protein: Math.round(+lunchTargets.protein||0) };
+            const p   = PROTEINS.find(x=>x.id===meal.protein);
+            const c   = CARBS.find(x=>x.id===meal.carb);
+            const v   = meal.veggie ? VEGGIES.find(x=>x.id===meal.veggie) : null;
+            const proteinOk = Math.abs(m.protein - tgt.protein) <= 5;
+            const calsOk    = Math.abs(m.cals - tgt.cals) <= 30;
 
             return (
-              <div style={{marginTop:8}}>
+              <div style={{marginTop:12}}>
                 <div style={{fontFamily:"var(--fd)",fontSize:20,letterSpacing:1,color:"var(--txt2)",marginBottom:10}}>
-                  MEAL SUMMARY — {user?.name}
-                </div>
-                <MR cals={m.cals} protein={m.protein} carbs={m.carbs} fat={m.fat}/>
-
-                {/* Priority 1: Protein */}
-                <div style={alertStyle(proteinOk, dProtein>0)}>
-                  {proteinOk
-                    ? `✅ PROTEIN ON TARGET — ${m.protein}g (goal: ${tgt.protein}g)`
-                    : dProtein > 0
-                      ? `🔴 YOU ARE OVER ON PROTEIN +${dProtein}g (${m.protein}g vs ${tgt.protein}g goal)`
-                      : `🟡 YOU ARE UNDER ON PROTEIN ${dProtein}g (${m.protein}g vs ${tgt.protein}g goal)`}
+                  MEAL PLAN — {user?.name}
                 </div>
 
-                {/* Priority 2: Calories */}
-                <div style={alertStyle(calsOk, dCals>0)}>
-                  {calsOk
-                    ? `✅ CALORIES ON TARGET — ${m.cals} kcal (goal: ${tgt.cals})`
-                    : dCals > 0
-                      ? `🔴 YOU ARE OVER ON CALORIES +${dCals} kcal (${m.cals} vs ${tgt.cals} goal)`
-                      : `🟡 YOU ARE UNDER ON CALORIES ${dCals} kcal (${m.cals} vs ${tgt.cals} goal)`}
+                {/* Final macro summary */}
+                <div className="mr" style={{marginBottom:14}}>
+                  <div className="mc hl"><div className="v">{m.cals}</div><div className="l">Kcal</div></div>
+                  <div className="mc"><div className="v">{m.protein}g</div><div className="l">Protein</div></div>
+                  <div className="mc"><div className="v">{m.carbs}g</div><div className="l">Carbs</div></div>
+                  <div className="mc"><div className="v">{m.fat}g</div><div className="l">Fat</div></div>
                 </div>
 
-                {/* Carbs */}
-                <div style={alertStyle(carbsOk, dCarbs>0)}>
-                  {carbsOk
-                    ? `✅ CARBS ON TARGET — ${m.carbs}g (goal: ${tgt.carbs}g)`
-                    : dCarbs > 0
-                      ? `🔴 YOU ARE OVER ON CARBS +${dCarbs}g (${m.carbs}g vs ${tgt.carbs}g goal)`
-                      : `🟡 YOU ARE UNDER ON CARBS ${dCarbs}g (${m.carbs}g vs ${tgt.carbs}g goal)`}
+                {/* Protein — always first, locked to target */}
+                <div style={{background:"rgba(0,230,118,.08)",border:"1.5px solid rgba(0,230,118,.4)",
+                  borderRadius:8,padding:"10px 14px",marginBottom:8,fontSize:13,color:"var(--grn)",fontWeight:600}}>
+                  ✅ PROTEIN LOCKED — {m.protein}g
+                  {p&&<span style={{fontWeight:400,color:"var(--muted)",marginLeft:6}}>
+                    {opt.proteinCookedG}g cooked ({gToOz(opt.proteinCookedG).toFixed(1)} oz) of {p.name}
+                  </span>}
                 </div>
 
-                {/* Fat */}
-                <div style={alertStyle(fatOk, dFat>0)}>
-                  {fatOk
-                    ? `✅ FAT ON TARGET — ${m.fat}g (goal: ${tgt.fat}g)`
-                    : dFat > 0
-                      ? `🔴 YOU ARE OVER ON FAT +${dFat}g (${m.fat}g vs ${tgt.fat}g goal)`
-                      : `🟡 YOU ARE UNDER ON FAT ${dFat}g (${m.fat}g vs ${tgt.fat}g goal)`}
+                {/* Calories — met by scaling carb */}
+                <div style={{background: calsOk?"rgba(0,230,118,.08)":"rgba(255,140,0,.08)",
+                  border:`1.5px solid ${calsOk?"rgba(0,230,118,.4)":"rgba(255,140,0,.4)"}`,
+                  borderRadius:8,padding:"10px 14px",marginBottom:8,fontSize:13,
+                  color:calsOk?"var(--grn)":"var(--acc2)",fontWeight:600}}>
+                  {calsOk?"✅":"🟡"} CALORIES — {m.cals} kcal {tgt.cals>0&&`(target: ${tgt.cals})`}
+                  {c&&<span style={{fontWeight:400,color:"var(--muted)",marginLeft:6}}>
+                    {opt.carbCookedG}g cooked ({gToOz(opt.carbCookedG).toFixed(1)} oz) of {c.name} added to balance
+                  </span>}
                 </div>
 
-                {!allOk && (
-                  <div style={{display:"flex",gap:8,marginTop:4,marginBottom:4}}>
-                    <button className="btn bp" style={{flex:1,marginTop:0,padding:"11px"}}
-                      onClick={nextUser}>
-                      ✅ Looks Good — Continue
-                    </button>
-                    <button className="btn bs" style={{flex:1,marginTop:0,padding:"11px"}}
-                      onClick={()=>setBStep(1)}>
-                      🔄 Adjust Meal
-                    </button>
+                {/* Carbs & Fat — reported as result, not flagged */}
+                <div style={{background:"var(--surf2)",border:"1px solid var(--bdr)",
+                  borderRadius:8,padding:"10px 14px",marginBottom:8,fontSize:13,color:"var(--txt2)"}}>
+                  <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                    <span>🍚 <strong>{m.carbs}g carbs</strong> — result of {c?.name} portion</span>
+                    <span>🥑 <strong>{m.fat}g fat</strong> — result of {p?.name} fat content</span>
+                    {v&&<span>🥦 <strong>{v.name}</strong> — {opt.veggieCookedG}g cooked ({gToOz(opt.veggieCookedG).toFixed(1)} oz)</span>}
                   </div>
-                )}
-                {allOk && (
-                  <div className="al ag" style={{marginTop:4}}>
-                    <span className="ai">🎯</span>
-                    <span><strong>Perfect match!</strong> All macros are within target.</span>
-                  </div>
-                )}
+                </div>
+
+                {/* How it was built */}
+                <div style={{fontSize:11,color:"var(--muted)",marginBottom:14,lineHeight:1.7,padding:"8px 0"}}>
+                  Protein was set first to hit {tgt.protein}g. {c?.name} portion was scaled to fill remaining {Math.max(0,tgt.cals-(opt.proteinMacros.cals+(v?opt.veggieMacros.cals:0)))} kcal.
+                  Carbs and fat are the natural result of those portions.
+                </div>
               </div>
             );
           })()}
 
-          {(!meal.protein||!meal.carb)&&null}
-          {(meal.protein&&meal.carb)&&null}
-
-          {!(meal.protein&&meal.carb) && (
-            <button className="btn bp" onClick={nextUser}>
-              {activeUser<data.users.length-1
-                ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
-                : "✓ All Done — View Shopping List →"}
-            </button>
-          )}
-          {(meal.protein&&meal.carb)&&(()=>{
-            const m   = calcMacros(meal, user);
-            const tgt = { cals:Math.round(+lunchTargets.cals||0), protein:Math.round(+lunchTargets.protein||0), carbs:Math.round(+lunchTargets.carbs||0), fat:Math.round(+lunchTargets.fat||0) };
-            const allOk = Math.abs(m.protein-tgt.protein)<=5 && Math.abs(m.cals-tgt.cals)<=25 && Math.abs(m.carbs-tgt.carbs)<=5 && Math.abs(m.fat-tgt.fat)<=5;
-            return allOk ? (
-              <button className="btn bp" onClick={nextUser}>
-                {activeUser<data.users.length-1
-                  ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
-                  : "✓ All Done — View Shopping List →"}
-              </button>
-            ) : null;
-          })()}
+          <button className="btn bp" disabled={!(meal.protein&&meal.carb)} onClick={nextUser}>
+            {activeUser<data.users.length-1
+              ? `✓ Done — Next: ${data.users[activeUser+1]?.name} →`
+              : "✓ All Done — View Shopping List →"}
+          </button>
         </>
       )}
     </div>
@@ -2109,7 +2126,14 @@ function CookingOptions({ data, setData, onComplete }) {
 
         // Per user: cooked grams per single meal container
         const userPortions = usersForIngr.map(u => {
-          const cookedPerMeal = isProtein ? calcCookedProteinNeeded(u, id) : item.cookedPerServing;
+          const lt = u.otherMeals
+            ? { cals:+u.otherMeals.cals||0, protein:+u.otherMeals.protein||0, carbs:+u.otherMeals.carbs||0, fat:+u.otherMeals.fat||0 }
+            : { cals:+u.cals||0, protein:+u.protein||0, carbs:+u.carbs||0, fat:+u.fat||0 };
+          const opt = calcOptimalMeal(u.meal, u, lt);
+          let cookedPerMeal;
+          if (isProtein)                    cookedPerMeal = opt ? opt.proteinCookedG : calcCookedProteinNeeded(u, id);
+          else if (CARBS.some(x=>x.id===id)) cookedPerMeal = opt ? opt.carbCookedG    : item.cookedPerServing;
+          else                               cookedPerMeal = item.cookedPerServing; // veggie unchanged
           const scaledProtein = isProtein ? Math.round((item.proteinPer100gCooked / 100) * cookedPerMeal) : null;
           return { user: u, cookedPerMeal, scaledProtein };
         });
@@ -2120,9 +2144,18 @@ function CookingOptions({ data, setData, onComplete }) {
           return s + x.cookedPerMeal * ud * um;
         }, 0);
         const totalCookedOz = gToOz(totalCookedG);
-        const totalRawG = isProtein
-          ? userPortions.reduce((s, x) => { const ud=Math.round(+(x.user.days||5)); const um=Math.round(+(x.user.mealsPerDay||1)); return s+cookedToRaw(x.cookedPerMeal,id)*ud*um; }, 0)
-          : userPortions.reduce((s, x) => { const ud=Math.round(+(x.user.days||5)); const um=Math.round(+(x.user.mealsPerDay||1)); return s+item.rawPerServing*ud*um; }, 0);
+        const totalRawG = userPortions.reduce((s, x) => {
+          const ud = Math.round(+(x.user.days||5)); const um = Math.round(+(x.user.mealsPerDay||1));
+          const lt = x.user.otherMeals
+            ? { cals:+x.user.otherMeals.cals||0, protein:+x.user.otherMeals.protein||0, carbs:+x.user.otherMeals.carbs||0, fat:+x.user.otherMeals.fat||0 }
+            : { cals:+x.user.cals||0, protein:+x.user.protein||0, carbs:+x.user.carbs||0, fat:+x.user.fat||0 };
+          const opt = calcOptimalMeal(x.user.meal, x.user, lt);
+          let rawPerMeal;
+          if (isProtein)                     rawPerMeal = opt ? opt.proteinRawG : cookedToRaw(x.cookedPerMeal, id);
+          else if (CARBS.some(z=>z.id===id)) rawPerMeal = opt ? opt.carbRawG    : item.rawPerServing;
+          else                               rawPerMeal = item.rawPerServing;
+          return s + rawPerMeal * ud * um;
+        }, 0);
         const totalRawOz = gToOz(totalRawG);
         const totalContainers = userPortions.reduce((s,x)=>s+Math.round(+(x.user.days||5))*Math.round(+(x.user.mealsPerDay||1)),0);
 
@@ -2197,11 +2230,16 @@ function CookingOptions({ data, setData, onComplete }) {
         const p = PROTEINS.find(x=>x.id===u.meal?.protein);
         const c = CARBS.find(x=>x.id===u.meal?.carb);
         const v = u.meal?.veggie ? VEGGIES.find(x=>x.id===u.meal.veggie) : null;
-        const pCooked  = p ? calcCookedProteinNeeded(u, u.meal.protein) : 0;
+        const lt2 = u.otherMeals
+          ? { cals:+u.otherMeals.cals||0, protein:+u.otherMeals.protein||0, carbs:+u.otherMeals.carbs||0, fat:+u.otherMeals.fat||0 }
+          : { cals:+u.cals||0, protein:+u.protein||0, carbs:+u.carbs||0, fat:+u.fat||0 };
+        const opt2 = (p && c) ? calcOptimalMeal(u.meal, u, lt2) : null;
+        const pCooked  = opt2 ? opt2.proteinCookedG : (p ? calcCookedProteinNeeded(u, u.meal.protein) : 0);
+        const cCooked  = opt2 ? opt2.carbCookedG    : (c?.cookedPerServing||0);
         const pProtein = p ? Math.round((p.proteinPer100gCooked/100)*pCooked) : 0;
-        const tG  = pCooked + (c?.cookedPerServing||0) + (v?.cookedPerServing||0);
+        const tG  = pCooked + cCooked + (v?.cookedPerServing||0);
         const tOz = gToOz(tG);
-        const m   = calcMacros(u.meal, u);
+        const m   = opt2 ? opt2.macros : calcMacros(u.meal, u);
         const eatByStr = eatBy.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
         return (
           <div key={u.id} className="lp" style={{marginBottom:14}}>
@@ -2230,7 +2268,7 @@ function CookingOptions({ data, setData, onComplete }) {
               </div>}
               {c&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#333"}}>
                 <span>{c.name}</span>
-                <span style={{fontWeight:700,color:"#111"}}>{c.cookedPerServing}g ({gToOz(c.cookedPerServing).toFixed(1)} oz) cooked</span>
+                <span style={{fontWeight:700,color:"#111"}}>{cCooked}g ({gToOz(cCooked).toFixed(1)} oz) cooked</span>
               </div>}
               {v&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#333"}}>
                 <span>{v.name}</span>
