@@ -1,4 +1,129 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+
+// ─── SUPABASE CLIENT ─────────────────────────────────────────────────────────
+// Keys are injected at build time via Vercel env vars (never in source control)
+const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "https://funwzigyhjbgasivmogb.supabase.co";
+const SUPA_KEY  = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1bnd6aWd5aGpiZ2FzaXZtb2diIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTM0NjksImV4cCI6MjA4OTU4OTQ2OX0.PJ5ynXt8Ni-aj0vJe4BrMcxfYcugEFcvwkABuzYJZKI";
+
+let _supa = null;
+async function getSupa() {
+  if (_supa) return _supa;
+  // Load Supabase from CDN — no npm install needed
+  if (!window.__supabaseLoaded) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+    window.__supabaseLoaded = true;
+  }
+  _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+  return _supa;
+}
+
+// ─── DB HELPERS ──────────────────────────────────────────────────────────────
+
+async function dbLoadProfiles(accountId) {
+  const sb = await getSupa();
+  const { data, error } = await sb.from('profiles').select('*').eq('account_id', accountId).order('created_at');
+  if (error) { console.error('loadProfiles:', error); return []; }
+  return (data || []).map(row => ({
+    id:           row.id,
+    name:         row.name,
+    age:          row.age,
+    gender:       row.gender,
+    macroMode:    row.macro_mode,
+    protein:      row.protein,
+    carbs:        row.carbs,
+    fat:          row.fat,
+    cals:         row.cals,
+    goal:         row.goal,
+    goal_raw:     row.goal_raw,
+    activity:     row.activity,
+    weight:       row.weight,
+    proteinG:     row.protein_g,
+    carbPct:      row.carb_pct,
+    tdee:         row.tdee,
+    days:         row.days || '5',
+    mealsPerDay:  row.meals_per_day || '1',
+    restrictions: row.restrictions || ['None'],
+    otherMeals:   row.other_meals || null,
+    meal:         { protein: null, carb: null, veggie: null },
+    _dbId:        row.id,
+  }));
+}
+
+async function dbSaveProfile(accountId, user) {
+  const sb = await getSupa();
+  const row = {
+    account_id:    accountId,
+    name:          user.name,
+    age:           user.age,
+    gender:        user.gender,
+    macro_mode:    user.macroMode,
+    protein:       user.protein,
+    carbs:         user.carbs,
+    fat:           user.fat,
+    cals:          user.cals,
+    goal:          user.goal,
+    goal_raw:      user.goal_raw,
+    activity:      user.activity,
+    weight:        user.weight,
+    protein_g:     user.proteinG,
+    carb_pct:      user.carbPct,
+    tdee:          user.tdee,
+    days:          user.days || '5',
+    meals_per_day: user.mealsPerDay || '1',
+    restrictions:  user.restrictions || ['None'],
+    other_meals:   user.otherMeals || null,
+    updated_at:    new Date().toISOString(),
+  };
+  if (user._dbId) {
+    const { error } = await sb.from('profiles').update(row).eq('id', user._dbId);
+    if (error) console.error('updateProfile:', error);
+    return user._dbId;
+  } else {
+    const { data, error } = await sb.from('profiles').insert(row).select('id').single();
+    if (error) { console.error('insertProfile:', error); return null; }
+    return data?.id;
+  }
+}
+
+async function dbDeleteProfile(dbId) {
+  const sb = await getSupa();
+  const { error } = await sb.from('profiles').delete().eq('id', dbId);
+  if (error) console.error('deleteProfile:', error);
+}
+
+async function dbLoadCycles(accountId) {
+  const sb = await getSupa();
+  const { data, error } = await sb.from('cycles').select('*').eq('account_id', accountId).order('created_at', { ascending: false }).limit(10);
+  if (error) { console.error('loadCycles:', error); return []; }
+  return (data || []).map(row => ({
+    id:           row.id,
+    date:         new Date(row.created_at).toLocaleDateString(),
+    days:         row.round_days,
+    mealsPerDay:  row.round_meals_per_day,
+    equipment:    row.equipment || [],
+    methodChoices:row.method_choices || {},
+    users:        row.users_snapshot || [],
+  }));
+}
+
+async function dbSaveCycle(accountId, data) {
+  const sb = await getSupa();
+  const row = {
+    account_id:          accountId,
+    round_days:          data.round?.days || 5,
+    round_meals_per_day: data.round?.mealsPerDay || 1,
+    equipment:           data.equipment || [],
+    method_choices:      data.methodChoices || {},
+    users_snapshot:      data.users || [],
+  };
+  const { error } = await sb.from('cycles').insert(row);
+  if (error) console.error('saveCycle:', error);
+}
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -344,11 +469,10 @@ const S = `
   .app{min-height:100vh;max-width:500px;margin:0 auto;padding-bottom:100px}
 
   /* HEADER */
-  .hdr{background:#000;border-bottom:2px solid var(--acc);padding:18px 20px 14px;position:sticky;top:0;z-index:100}
+  .hdr{background:#0a1a0e;border-bottom:2px solid #2d6a35;padding:14px 20px 12px;position:sticky;top:0;z-index:100}
   .hdr-row{display:flex;align-items:center;justify-content:space-between}
-  .logo{font-family:var(--fd);font-size:28px;letter-spacing:3px;color:var(--acc);line-height:1}
-  .logo span{color:#fff}
-  .logo-sub{font-size:10px;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-top:2px}
+  .logo-img{height:52px;width:auto;display:block;object-fit:contain;filter:drop-shadow(0 0 6px rgba(0,0,0,.5))}
+  .logo-sub{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:3px}
   .hdr-info{text-align:right}
   .hdr-info .days{font-family:var(--fd);font-size:20px;color:var(--acc);line-height:1}
   .hdr-info .sub{font-size:10px;color:var(--muted)}
@@ -487,6 +611,20 @@ const S = `
   .hi{display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--surf3);border-radius:10px;margin-bottom:8px;border:1px solid var(--bdr2);cursor:pointer;transition:border-color .15s}
   .hi:hover{border-color:var(--acc)}
 
+  /* AUTH SCREEN */
+  .auth-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
+  .auth-card{width:100%;max-width:380px;background:var(--surf2);border:1px solid var(--bdr);border-radius:16px;padding:28px 24px}
+  .auth-logo{display:flex;justify-content:center;margin-bottom:20px}
+  .auth-logo img{height:80px;width:auto;filter:drop-shadow(0 0 8px rgba(0,0,0,.6))}
+  .auth-title{font-family:var(--fd);font-size:28px;text-align:center;color:#fff;letter-spacing:1px;margin-bottom:4px}
+  .auth-sub{font-size:12px;color:var(--muted);text-align:center;margin-bottom:22px;letter-spacing:2px;text-transform:uppercase}
+  .auth-tabs{display:flex;gap:0;margin-bottom:20px;background:var(--surf3);border-radius:8px;padding:3px}
+  .auth-tab{flex:1;padding:9px;text-align:center;font-size:13px;font-weight:600;border-radius:6px;cursor:pointer;color:var(--muted);transition:all .15s}
+  .auth-tab.active{background:var(--acc);color:#fff}
+  .auth-err{background:rgba(255,23,68,.1);border:1px solid rgba(255,23,68,.4);color:#ff8099;border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:12px}
+  .auth-ok{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);color:var(--grn);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:12px}
+  .signout-btn{font-size:11px;font-weight:700;color:var(--muted);background:transparent;border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;cursor:pointer;letter-spacing:.5px;transition:all .15s}
+  .signout-btn:hover{color:#fff;border-color:var(--bdr2)}
   /* MISC */
   .div{height:1px;background:var(--bdr);margin:14px 0}
   input[type=range]{width:100%;accent-color:var(--acc);cursor:pointer}
@@ -555,7 +693,7 @@ function buildExportHTML(cardsHTML, title, data) {
   const users    = data?.users || [];
   const userLine = users.length ? users.map(u=>`${u.name}${u.days?' · '+u.days+'d':'​'}`).join('  |  ') : '';
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
-<title>KISSS LUNCHES — ${title}</title>
+<title>KISSS MEALS — ${title}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:${PDF_BG};color:${PDF_TEXT};font-size:13px;line-height:1.6;padding:32px 28px}
@@ -579,7 +717,7 @@ tr:last-child td{border-bottom:none}
 .doc-footer{margin-top:32px;border-top:1px solid ${PDF_BORDER};padding-top:10px;font-size:10px;color:${PDF_MUTED}!important;text-align:center}
 </style></head><body>
 <div class="doc-header">
-  <div class="doc-logo">KISSS LUNCHES</div>
+  <div class="doc-logo">KISSS MEALS</div>
   <div class="doc-meta">
     <div class="stitle">${title}</div>
     <div>${date}</div>
@@ -587,7 +725,7 @@ tr:last-child td{border-bottom:none}
   </div>
 </div>
 ${cardsHTML}
-<div class="doc-footer">KISSS LUNCHES · ${date} · Keep It Simple, Stay Shredded</div>
+<div class="doc-footer">KISSS MEALS · ${date} · Meal Prep Planner for Simple Shred</div>
 </body></html>`;
 }
 
@@ -648,7 +786,7 @@ async function renderHTMLToPDF(htmlContent, filename) {
   const file = new File([blob], filename, { type:'application/pdf' });
 
   if (navigator.canShare && navigator.canShare({ files:[file] })) {
-    await navigator.share({ files:[file], title:'KISSS LUNCHES' });
+    await navigator.share({ files:[file], title:'KISSS MEALS' });
   } else {
     const url = URL.createObjectURL(blob);
     const a   = Object.assign(document.createElement('a'), { href:url, download:filename });
@@ -726,7 +864,7 @@ function MR({ cals, protein, carbs, fat }) {
 
 // ─── MODULE 1 ─────────────────────────────────────────────────────────────────
 
-function UserSetup({ data, setData, onComplete }) {
+function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile }) {
   const [view, setView]   = useState("home");
   const [editing, setEditing] = useState(null);
   const [pStep, setPStep] = useState(0);
@@ -777,7 +915,7 @@ function UserSetup({ data, setData, onComplete }) {
     setEditing(u); setPStep(0); setGStep(0); setView("form");
   }
 
-  function saveUser() {
+  async function saveUser() {
     let p2, c2, fa2, cal2, gl;
     if (f.macroMode==="know") {
       p2=f.protein; c2=f.carbs; fa2=f.fat; cal2=String(knowCals); gl="Custom";
@@ -785,9 +923,12 @@ function UserSetup({ data, setData, onComplete }) {
       p2=String(Math.round(+f.proteinG)); c2=String(carbG); fa2=String(fatG);
       cal2=String(calGoal); gl={cut:"Fat Loss",bulk:"Muscle Gain",maintain:"Maintenance"}[f.goal]||"Maintenance";
     }
-    const u = { ...f, protein:p2, carbs:c2, fat:fa2, cals:cal2, goal:gl, goal_raw:f.goal,
-                tdee:tdee?String(tdee):"", days:f.days||"5", mealsPerDay:f.mealsPerDay||"1",
-                id:editing?.id||String(Date.now()), meal:editing?.meal||initMeal() };
+    let u = { ...f, protein:p2, carbs:c2, fat:fa2, cals:cal2, goal:gl, goal_raw:f.goal,
+              tdee:tdee?String(tdee):"", days:f.days||"5", mealsPerDay:f.mealsPerDay||"1",
+              id:editing?.id||String(Date.now()), meal:editing?.meal||initMeal(),
+              _dbId: editing?._dbId || null };
+    // Save to Supabase if handler provided
+    if (onSaveProfile) u = await onSaveProfile(u);
     const users = editing ? data.users.map(x=>x.id===u.id?u:x) : [...data.users,u];
     setData({ ...data, users }); setView("home");
   }
@@ -1162,7 +1303,15 @@ function UserSetup({ data, setData, onComplete }) {
               <div className="un">{u.name}</div>
               <div className="usb">{u.goal}{u.cals?` · ${u.cals} kcal`:""}{u.protein?` · P:${u.protein}g`:""}{u.days?` · ${u.days}d/${u.mealsPerDay||1}m`:""}</div>
             </div>
-            <button className="btn bg bsm" onClick={()=>startEdit(u)}>Edit</button>
+            <div style={{display:"flex",gap:6}}>
+              <button className="btn bg bsm" onClick={()=>startEdit(u)}>Edit</button>
+              <button className="btn bg bsm" style={{color:"#ff6080",borderColor:"rgba(255,23,68,.4)"}}
+                onClick={async()=>{
+                  if(!window.confirm(`Remove ${u.name} from this account?`)) return;
+                  if(onDeleteProfile) await onDeleteProfile(u);
+                  setData(prev=>({...prev,users:prev.users.filter(x=>x.id!==u.id)}));
+                }}>✕</button>
+            </div>
           </div>
         ))}
       </div>
@@ -2388,12 +2537,164 @@ function StorageOptions({ data }) {
 // ─── FULL EXPORT ─────────────────────────────────────────────────────────────
 
 
+// ─── AUTH SCREEN ─────────────────────────────────────────────────────────────
+
+function AuthScreen({ onAuth }) {
+  const [mode, setMode]       = useState('signin'); // 'signin' | 'signup'
+  const [email, setEmail]     = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [message, setMessage] = useState('');
+
+  async function handleSubmit() {
+    if (!email.trim() || !password.trim()) { setError('Please enter your email and password.'); return; }
+    if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    setLoading(true); setError(''); setMessage('');
+    try {
+      const sb = await getSupa();
+      if (mode === 'signup') {
+        const { data, error: e } = await sb.auth.signUp({ email: email.trim(), password });
+        if (e) { setError(e.message); return; }
+        if (data.user && !data.session) {
+          setMessage('Check your email for a confirmation link, then sign in.');
+        } else if (data.session) {
+          onAuth(data.session.user);
+        }
+      } else {
+        const { data, error: e } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+        if (e) { setError(e.message); return; }
+        onAuth(data.user);
+      }
+    } catch(e) {
+      setError('Connection error. Check your internet and try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="auth-wrap">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <img src="/kisss-logo.png" alt="KISSS MEALS" />
+        </div>
+        <div className="auth-title">KISSS MEALS</div>
+        <div className="auth-sub">Meal Prep Planner for Simple Shred</div>
+
+        <div className="auth-tabs">
+          <div className={`auth-tab ${mode==='signin'?'active':''}`} onClick={()=>{setMode('signin');setError('');setMessage('')}}>Sign In</div>
+          <div className={`auth-tab ${mode==='signup'?'active':''}`} onClick={()=>{setMode('signup');setError('');setMessage('')}}>Create Account</div>
+        </div>
+
+        {error   && <div className="auth-err">⚠️ {error}</div>}
+        {message && <div className="auth-ok">✅ {message}</div>}
+
+        <label className="lbl">Email</label>
+        <input className="inp" type="email" inputMode="email" autoComplete="email"
+          placeholder="your@email.com" value={email}
+          onChange={e=>setEmail(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&handleSubmit()} />
+
+        <label className="lbl">Password</label>
+        <input className="inp" type="password" autoComplete={mode==='signup'?'new-password':'current-password'}
+          placeholder={mode==='signup'?'Min 6 characters':'Your password'} value={password}
+          onChange={e=>setPassword(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&handleSubmit()} />
+
+        <button className="btn bp" disabled={loading} onClick={handleSubmit} style={{marginTop:12}}>
+          {loading ? '⏳ Please wait...' : mode==='signup' ? 'Create Account' : 'Sign In'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [tab, setTab]   = useState(0);
-  const [data, setData] = useState({ users:[], round:null, equipment:[], methodChoices:{}, history:[] });
+  const [tab, setTab]         = useState(0);
+  const [data, setData]       = useState({ users:[], round:null, equipment:[], methodChoices:{}, history:[] });
+  const [authUser, setAuthUser] = useState(null);   // null = not logged in
+  const [authLoading, setAuthLoading] = useState(true); // checking session on mount
+  const [saving, setSaving]   = useState(false);    // shows saving indicator
 
+  // ── Check for existing session on app load ──────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const sb = await getSupa();
+        const { data: { session } } = await sb.auth.getSession();
+        if (session?.user) {
+          await loadUserData(session.user);
+        }
+      } catch(e) { console.error('session check:', e); }
+      finally { setAuthLoading(false); }
+
+      // Listen for auth state changes (sign in / sign out)
+      const sb = await getSupa();
+      const { data: { subscription } } = sb.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          await loadUserData(session.user);
+        } else if (event === 'SIGNED_OUT') {
+          setAuthUser(null);
+          setData({ users:[], round:null, equipment:[], methodChoices:{}, history:[] });
+          setTab(0);
+        }
+      });
+      return () => subscription.unsubscribe();
+    })();
+  }, []);
+
+  // ── Load profiles + cycle history from Supabase ─────────────────────────
+  async function loadUserData(user) {
+    try {
+      const [profiles, cycles] = await Promise.all([
+        dbLoadProfiles(user.id),
+        dbLoadCycles(user.id),
+      ]);
+      setAuthUser(user);
+      setData(prev => ({
+        ...prev,
+        users: profiles,
+        history: cycles.map(c => ({ days:c.days, mealsPerDay:c.mealsPerDay, date:c.date })),
+        _cycles: cycles,
+      }));
+    } catch(e) { console.error('loadUserData:', e); setAuthUser(user); }
+  }
+
+  // ── Save a profile (create or update) ───────────────────────────────────
+  const saveProfileToDB = useCallback(async (user) => {
+    if (!authUser) return user;
+    setSaving(true);
+    try {
+      const dbId = await dbSaveProfile(authUser.id, user);
+      return { ...user, _dbId: dbId || user._dbId };
+    } catch(e) { console.error('saveProfileToDB:', e); return user; }
+    finally { setSaving(false); }
+  }, [authUser]);
+
+  // ── Delete a profile ─────────────────────────────────────────────────────
+  const deleteProfileFromDB = useCallback(async (user) => {
+    if (!authUser || !user._dbId) return;
+    try { await dbDeleteProfile(user._dbId); }
+    catch(e) { console.error('deleteProfileFromDB:', e); }
+  }, [authUser]);
+
+  // ── Save completed cycle to history ─────────────────────────────────────
+  async function saveCycleToDB(cycleData) {
+    if (!authUser) return;
+    try { await dbSaveCycle(authUser.id, cycleData); }
+    catch(e) { console.error('saveCycleToDB:', e); }
+  }
+
+  // ── Sign out ─────────────────────────────────────────────────────────────
+  async function signOut() {
+    const sb = await getSupa();
+    await sb.auth.signOut();
+  }
+
+  // ── Tab state ────────────────────────────────────────────────────────────
   const setupDone    = data.users.length>0 && !!data.round;
   const shoppingDone = setupDone && data.users.every(u=>u.meal?.protein&&u.meal?.carb);
   const cookingDone  = shoppingDone && (data.equipment||[]).length>0;
@@ -2406,11 +2707,37 @@ export default function App() {
     return "locked";
   }
 
-  function completeSetup() {
+  async function completeSetup() {
     const d = new Date().toLocaleDateString();
     const h = [{days:data.round.days,mealsPerDay:data.round.mealsPerDay,date:d},...(data.history||[])].slice(0,5);
-    setData(p=>({...p,history:h})); setTab(1);
+    setData(p=>({...p,history:h}));
+    setTab(1);
   }
+
+  async function completeCooking() {
+    await saveCycleToDB(data);
+    setTab(3);
+  }
+
+  // ── Loading / auth gate ──────────────────────────────────────────────────
+  if (authLoading) return (
+    <>
+      <style>{S}</style>
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#000"}}>
+        <div style={{textAlign:"center"}}>
+          <img src="/kisss-logo.png" alt="KISSS MEALS" style={{height:80,marginBottom:16,filter:"drop-shadow(0 0 8px rgba(0,0,0,.6))"}}/>
+          <div style={{fontFamily:"var(--fd)",fontSize:22,color:"var(--acc)",letterSpacing:2}}>Loading...</div>
+        </div>
+      </div>
+    </>
+  );
+
+  if (!authUser) return (
+    <>
+      <style>{S}</style>
+      <AuthScreen onAuth={loadUserData} />
+    </>
+  );
 
   const tabs = [{l:"Setup",i:"👤"},{l:"Shop",i:"🛒"},{l:"Cook",i:"🍳"},{l:"Store",i:"📦"}];
 
@@ -2421,15 +2748,21 @@ export default function App() {
         <div className="hdr">
           <div className="hdr-row">
             <div>
-              <div className="logo">KISSS <span>LUNCHES</span></div>
-              <div className="logo-sub">Keep It Simple, Stay Shredded</div>
+              <img src="/kisss-logo.png" alt="KISSS MEALS" className="logo-img" />
+              <div className="logo-sub">Meal Prep Planner for Simple Shred</div>
             </div>
-            {data.round&&(
-              <div className="hdr-info">
-                <div className="days">{data.round.days}D / {data.round.mealsPerDay}M</div>
-                <div className="sub">{data.users.length} user{data.users.length!==1?"s":""}</div>
+            <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+              {data.round&&(
+                <div className="hdr-info">
+                  <div className="days">{data.round.days}D / {data.round.mealsPerDay}M</div>
+                  <div className="sub">{data.users.length} user{data.users.length!==1?"s":""}</div>
+                </div>
+              )}
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                {saving&&<span style={{fontSize:10,color:"var(--grn)"}}>💾 Saving...</span>}
+                <button className="signout-btn" onClick={signOut}>Sign Out</button>
               </div>
-            )}
+            </div>
           </div>
         </div>
 
@@ -2449,9 +2782,9 @@ export default function App() {
           })}
         </div>
 
-        {tab===0&&<UserSetup      data={data} setData={setData} onComplete={completeSetup}/>}
+        {tab===0&&<UserSetup      data={data} setData={setData} onComplete={completeSetup} onSaveProfile={saveProfileToDB} onDeleteProfile={deleteProfileFromDB}/>}
         {tab===1&&<ShoppingOptions data={data} setData={setData} onComplete={()=>setTab(2)}/>}
-        {tab===2&&<CookingOptions  data={data} setData={setData} onComplete={()=>setTab(3)}/>}
+        {tab===2&&<CookingOptions  data={data} setData={setData} onComplete={completeCooking}/>}
         {tab===3&&<StorageOptions  data={data}/>}
       </div>
     </>
