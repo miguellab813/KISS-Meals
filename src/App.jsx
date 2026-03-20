@@ -297,6 +297,7 @@ function cookedToRaw(cookedG, itemId) {
 }
 
 function calcMacros(meal, user) {
+  if (!meal) return null;
   const p = PROTEINS.find(x => x.id === meal.protein);
   const c = CARBS.find(x => x.id === meal.carb);
   const v = meal.veggie ? VEGGIES.find(x => x.id === meal.veggie) : null;
@@ -325,6 +326,7 @@ function calcMacros(meal, user) {
 }
 
 function calcShelfLife(meal) {
+  if (!meal?.protein) return 5;
   const p = PROTEINS.find(x => x.id === meal.protein);
   const c = CARBS.find(x => x.id === meal.carb);
   const v = meal.veggie ? VEGGIES.find(x => x.id === meal.veggie) : null;
@@ -934,6 +936,31 @@ function ExportBar({ sectionId, label, showFull, onFullExport, data }) {
       )}
     </div>
   );
+}
+
+// ─── ERROR BOUNDARY ──────────────────────────────────────────────────────────
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error('Screen crashed:', e, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="page">
+          <div className="al ar" style={{marginTop:20}}>
+            <span className="ai">⚠️</span>
+            <div>
+              <strong>Something went wrong loading this screen.</strong><br/>
+              <span style={{fontSize:12,opacity:.8}}>{String(this.state.error?.message || this.state.error)}</span>
+            </div>
+          </div>
+          <button className="btn bg" onClick={()=>this.setState({error:null})}>← Try Again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
@@ -1895,8 +1922,30 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
   }
 
   // ── Shopping list ──
-  if (showList && allDone) {
-    const rawShop = calcRawWeights(data.users, data.round?.days||5);
+  if (showList) {
+    // Safety check
+    if (!allDone) {
+      return (
+        <div className="page">
+          <div className="al ar"><span className="ai">⚠️</span><span>Some users are missing a protein or carb selection. Go back and complete all meal selections.</span></div>
+          <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Back to Meal Builder</button>
+        </div>
+      );
+    }
+
+    let rawShop = {};
+    try { rawShop = calcRawWeights(data.users, data.round?.days||5); } catch(e) { console.error('calcRawWeights error:', e); }
+
+    const rawShopEntries = Object.entries(rawShop);
+    if (rawShopEntries.length === 0) {
+      return (
+        <div className="page">
+          <div className="al ar"><span className="ai">⚠️</span><span>Could not calculate shopping amounts. Please go back and re-confirm meal selections.</span></div>
+          <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Back to Meal Builder</button>
+        </div>
+      );
+    }
+
     const hasDeductions = Object.values(pantryAmounts).some(v=>v>0);
     return (
       <div className="page" id="section-shopping">
@@ -1913,7 +1962,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
 
         <div className="card">
           <div className="ct">🛒 Ingredients to Buy</div>
-          {Object.entries(rawShop).map(([name,val])=>{
+          {rawShopEntries.map(([name,val])=>{
             const { g, isProtein } = val;
             const deduct = pantryAmounts[name] || 0;
             const netG   = Math.max(0, g - deduct);
@@ -3051,10 +3100,10 @@ export default function App() {
           })}
         </div>
 
-        {tab===0&&<UserSetup      data={data} setData={setData} onComplete={completeSetup} onSaveProfile={saveProfileToDB} onDeleteProfile={deleteProfileFromDB} onBack={()=>setAppScreen("choose")}/>}
-        {tab===1&&<ShoppingOptions data={data} setData={setData} onComplete={()=>setTab(2)} onBack={()=>setTab(0)}/>}
-        {tab===2&&<CookingOptions  data={data} setData={setData} onComplete={completeCooking} onBack={()=>setTab(1)}/>}
-        {tab===3&&<StorageOptions  data={data} onBack={()=>setTab(2)}/>}
+        {tab===0&&<ErrorBoundary key="setup"><UserSetup      data={data} setData={setData} onComplete={completeSetup} onSaveProfile={saveProfileToDB} onDeleteProfile={deleteProfileFromDB} onBack={()=>setAppScreen("choose")}/></ErrorBoundary>}
+        {tab===1&&<ErrorBoundary key="shop"><ShoppingOptions data={data} setData={setData} onComplete={()=>{scrollToTop();setTab(2)}} onBack={()=>{scrollToTop();setTab(0)}}/></ErrorBoundary>}
+        {tab===2&&<ErrorBoundary key="cook"><CookingOptions  data={data} setData={setData} onComplete={completeCooking} onBack={()=>{scrollToTop();setTab(1)}}/></ErrorBoundary>}
+        {tab===3&&<ErrorBoundary key="store"><StorageOptions  data={data} onBack={()=>{scrollToTop();setTab(2)}}/></ErrorBoundary>}
       </div>
     </>
   );
