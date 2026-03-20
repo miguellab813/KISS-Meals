@@ -864,7 +864,7 @@ function MR({ cals, protein, carbs, fat }) {
 
 // ─── MODULE 1 ─────────────────────────────────────────────────────────────────
 
-function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile }) {
+function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, onBack }) {
   const [view, setView]   = useState("home");
   const [editing, setEditing] = useState(null);
   const [pStep, setPStep] = useState(0);
@@ -1337,11 +1337,10 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile }
       </div>
 
       <button className="btn bp" disabled={!canContinue} onClick={onComplete}>Continue to Meal Selection →</button>
+      {onBack && <button className="btn bg" style={{marginTop:8}} onClick={onBack}>← Back to Home</button>}
     </div>
   );
 }
-
-// ─── FOOD DATABASE ────────────────────────────────────────────────────────────
 
 const FOOD_DB = {
   "Proteins": [
@@ -1653,7 +1652,7 @@ function OtherMealsLookup({ user, savedOtherMeals, onSave, onSkip }) {
 
 // ─── MODULE 2 ─────────────────────────────────────────────────────────────────
 
-function ShoppingOptions({ data, setData, onComplete }) {
+function ShoppingOptions({ data, setData, onComplete, onBack }) {
   const [activeUser, setActiveUser] = useState(0);
   const [bStep, setBStep]           = useState(0);
   const [showList, setShowList]     = useState(false);
@@ -1884,11 +1883,21 @@ function ShoppingOptions({ data, setData, onComplete }) {
         </div>
         <button className="btn bp" onClick={onComplete}>Continue to Cooking →</button>
         <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(true); }}>← Edit Meals</button>
+        {onBack && <button className="btn bg" style={{marginTop:6}} onClick={onBack}>← Back to Setup</button>}
       </div>
     );
   }
 
-  // ── Meal builder ──
+  // ── Meal builder ── guard against missing user
+  if (!user) {
+    return (
+      <div className="page">
+        <div className="al ar"><span className="ai">⚠️</span><span>No users found. Go back to Setup and add at least one user profile.</span></div>
+        <button className="btn bg" onClick={()=>{ setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Refresh</button>
+      </div>
+    );
+  }
+
   const banners = [
     `Review ${user?.name}'s lunch targets (after other meals), then pick protein.`,
     "Choose a protein source.",
@@ -1944,19 +1953,63 @@ function ShoppingOptions({ data, setData, onComplete }) {
             )}
           </div>
 
-          {/* Other meals breakdown if exists */}
-          {user?.otherMeals?.items?.length > 0 && (
-            <div className="card">
-              <div className="ct">Other Meals Accounted For</div>
-              {user.otherMeals.items.map((item,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--bdr)",fontSize:12}}>
-                  <div style={{color:"var(--txt2)"}}>{item.name} <span style={{color:"var(--muted)"}}>({item.meal})</span></div>
-                  <div style={{color:"var(--muted)",flexShrink:0,marginLeft:8}}>{item.cals} kcal · P:{item.protein}g</div>
+          {/* Other meals breakdown with full macro summary and math */}
+          {user?.otherMeals?.items?.length > 0 && (()=>{
+            const items = user.otherMeals.items;
+            // Sum macros of all "other meals" items
+            const omTotals = items.reduce((acc, item) => ({
+              cals:    Math.round(acc.cals    + (item.cals    * (item.count||1))),
+              protein: Math.round(acc.protein + (item.protein * (item.count||1))),
+              carbs:   Math.round(acc.carbs   + (item.carbs   * (item.count||1))),
+              fat:     Math.round(acc.fat     + (item.fat     * (item.count||1))),
+            }), {cals:0,protein:0,carbs:0,fat:0});
+            const daily = {
+              cals:    Math.round(+user.cals    || 0),
+              protein: Math.round(+user.protein || 0),
+              carbs:   Math.round(+user.carbs   || 0),
+              fat:     Math.round(+user.fat     || 0),
+            };
+            return (
+              <div className="card">
+                <div className="ct">Other Meals Accounted For</div>
+                {/* Item list */}
+                {items.map((item,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--bdr)",fontSize:12}}>
+                    <div style={{color:"var(--txt2)"}}>{item.name} <span style={{color:"var(--muted)"}}>({item.meal})</span></div>
+                    <div style={{color:"var(--muted)",flexShrink:0,marginLeft:8,textAlign:"right"}}>
+                      {Math.round(item.cals*(item.count||1))} kcal · P:{Math.round(item.protein*(item.count||1))}g · C:{Math.round(item.carbs*(item.count||1))}g · F:{Math.round(item.fat*(item.count||1))}g
+                    </div>
+                  </div>
+                ))}
+                {/* Other meals subtotal */}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid var(--bdr2)",fontSize:12,fontWeight:700}}>
+                  <span style={{color:"var(--txt2)"}}>Other meals total</span>
+                  <span style={{color:"var(--acc)"}}>{omTotals.cals} kcal · P:{omTotals.protein}g · C:{omTotals.carbs}g · F:{omTotals.fat}g</span>
                 </div>
-              ))}
-              <button className="btn bg bsm" style={{marginTop:10}} onClick={()=>setDoingOtherMeals(true)}>Update Other Meals</button>
-            </div>
-          )}
+                {/* Math breakdown */}
+                {daily.cals > 0 && (
+                  <div style={{marginTop:10,fontSize:12,lineHeight:2}}>
+                    <div style={{display:"flex",justifyContent:"space-between",color:"var(--txt2)"}}>
+                      <span>Daily goal</span>
+                      <span>{daily.cals} kcal · P:{daily.protein}g · C:{daily.carbs}g · F:{daily.fat}g</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}>
+                      <span>− Other meals</span>
+                      <span>{omTotals.cals} kcal · P:{omTotals.protein}g · C:{omTotals.carbs}g · F:{omTotals.fat}g</span>
+                    </div>
+                    <div style={{height:1,background:"var(--bdr)",margin:"4px 0"}}/>
+                    <div style={{display:"flex",justifyContent:"space-between",fontWeight:700}}>
+                      <span style={{color:"var(--grn)"}}>= Lunch target</span>
+                      <span style={{color:"var(--grn)"}}>
+                        {Math.max(0,daily.cals-omTotals.cals)} kcal · P:{Math.max(0,daily.protein-omTotals.protein)}g · C:{Math.max(0,daily.carbs-omTotals.carbs)}g · F:{Math.max(0,daily.fat-omTotals.fat)}g
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <button className="btn bg bsm" style={{marginTop:12}} onClick={()=>setDoingOtherMeals(true)}>Update Other Meals</button>
+              </div>
+            );
+          })()}
 
           <button className="btn bp" onClick={()=>setBStep(1)}>Pick Protein →</button>
         </>
@@ -2120,7 +2173,7 @@ function ShoppingOptions({ data, setData, onComplete }) {
 
 // ─── MODULE 3 ─────────────────────────────────────────────────────────────────
 
-function CookingOptions({ data, setData, onComplete }) {
+function CookingOptions({ data, setData, onComplete, onBack }) {
   const [step, setStep]   = useState(0);
   const [equip, setEquip] = useState(data.equipment||[]);
   const [meths, setMeths] = useState(data.methodChoices||{});
@@ -2167,6 +2220,7 @@ function CookingOptions({ data, setData, onComplete }) {
         </div>
       </div>
       <button className="btn bp" disabled={equip.length===0} onClick={()=>setStep(1)}>Next — Dietary Check →</button>
+      {onBack && <button className="btn bg" style={{marginTop:6}} onClick={onBack}>← Back to Shopping</button>}
     </div>
   );
 
@@ -2437,7 +2491,7 @@ function CookingOptions({ data, setData, onComplete }) {
 
 // ─── MODULE 4 ─────────────────────────────────────────────────────────────────
 
-function StorageOptions({ data }) {
+function StorageOptions({ data, onBack }) {
   const days = data.round?.days||5;
   const shelf = data.users.length>0&&data.users[0].meal?.protein
     ? Math.min(...data.users.map(u=>u.meal?.protein?calcShelfLife(u.meal):7)) : 5;
@@ -2448,6 +2502,7 @@ function StorageOptions({ data }) {
       <div className="pt">STORAGE <span>& TIPS</span></div>
       <div className="ps">How to store, reheat, and enjoy your prepped meals.</div>
       <ExportBar sectionId="section-storage" label="Storage &amp; Tips" showFull={true} onFullExport={()=>triggerFullExport(data)} data={data} />
+      {onBack && <button className="btn bg bsm no-print" style={{marginBottom:12}} onClick={onBack}>← Back to Cooking</button>}
 
       {days>shelf?(
         <div className="al ar"><span className="ai">⛔</span>
@@ -2694,6 +2749,36 @@ export default function App() {
     await sb.auth.signOut();
   }
 
+  // ── Post-login home chooser ─────────────────────────────────────────────
+  const [appScreen, setAppScreen] = useState('choose'); // 'choose' | 'active'
+
+  // When user logs in, always show the chooser first
+  // Reset to chooser on sign-out is handled via SIGNED_OUT event above
+
+  function startNewCycle() {
+    // Clear meal selections but keep profiles; reset round
+    setData(prev => ({
+      ...prev,
+      users: prev.users.map(u => ({ ...u, meal: initMeal(), otherMeals: undefined })),
+      round: null, equipment: [], methodChoices: {},
+    }));
+    setTab(0);
+    setAppScreen('active');
+  }
+
+  function loadPreviousCycle(cycle) {
+    // Restore a saved cycle snapshot into working data
+    setData(prev => ({
+      ...prev,
+      users: cycle.users && cycle.users.length > 0 ? cycle.users : prev.users,
+      round: { days: cycle.days, mealsPerDay: cycle.mealsPerDay },
+      equipment: cycle.equipment || [],
+      methodChoices: cycle.methodChoices || {},
+    }));
+    setTab(0);
+    setAppScreen('active');
+  }
+
   // ── Tab state ────────────────────────────────────────────────────────────
   const setupDone    = data.users.length>0 && !!data.round;
   const shoppingDone = setupDone && data.users.every(u=>u.meal?.protein&&u.meal?.carb);
@@ -2741,6 +2826,63 @@ export default function App() {
 
   const tabs = [{l:"Setup",i:"👤"},{l:"Shop",i:"🛒"},{l:"Cook",i:"🍳"},{l:"Store",i:"📦"}];
 
+  // ── Home chooser screen ──────────────────────────────────────────────────
+  if (appScreen === 'choose') {
+    const cycles = data._cycles || [];
+    return (
+      <>
+        <style>{S}</style>
+        <div className="app">
+          <div className="hdr">
+            <div className="hdr-row">
+              <div>
+                <img src="/kisss-logo.png" alt="KISSS MEALS" className="logo-img" />
+                <div className="logo-sub">Meal Prep Planner for Simple Shred</div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+                <button className="signout-btn" onClick={signOut}>Sign Out</button>
+              </div>
+            </div>
+          </div>
+          <div className="page" style={{paddingTop:32}}>
+            <div className="pt">WELCOME <span>BACK</span></div>
+            <div className="ps" style={{marginBottom:28}}>
+              {authUser?.email ? `Signed in as ${authUser.email}` : "What would you like to do?"}
+            </div>
+
+            <button className="btn bp" style={{fontSize:16,padding:"18px 20px",marginBottom:12}}
+              onClick={startNewCycle}>
+              🆕 Start New Prep Cycle
+            </button>
+
+            <button className="btn bs"
+              style={{fontSize:16,padding:"18px 20px",marginBottom:cycles.length>0?24:0,
+                opacity: cycles.length>0?1:0.4, cursor:cycles.length>0?"pointer":"not-allowed"}}
+              disabled={cycles.length===0}
+              onClick={()=>cycles.length>0 && loadPreviousCycle(cycles[0])}>
+              {cycles.length>0 ? `♻️ Repeat Last Cycle (${cycles[0].date})` : "♻️ No Previous Cycles Yet"}
+            </button>
+
+            {cycles.length > 1 && (
+              <div className="card" style={{marginTop:8}}>
+                <div className="ct">⏱ Older Cycles</div>
+                {cycles.slice(1,5).map((c,i)=>(
+                  <div key={i} className="hi" onClick={()=>loadPreviousCycle(c)}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:700,color:"#fff"}}>{c.days}d · {c.mealsPerDay} meal{c.mealsPerDay>1?"s":""}/day</div>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>{c.date}</div>
+                    </div>
+                    <span style={{color:"var(--acc)",fontSize:12,fontWeight:700}}>LOAD ›</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <style>{S}</style>
@@ -2782,10 +2924,10 @@ export default function App() {
           })}
         </div>
 
-        {tab===0&&<UserSetup      data={data} setData={setData} onComplete={completeSetup} onSaveProfile={saveProfileToDB} onDeleteProfile={deleteProfileFromDB}/>}
-        {tab===1&&<ShoppingOptions data={data} setData={setData} onComplete={()=>setTab(2)}/>}
-        {tab===2&&<CookingOptions  data={data} setData={setData} onComplete={completeCooking}/>}
-        {tab===3&&<StorageOptions  data={data}/>}
+        {tab===0&&<UserSetup      data={data} setData={setData} onComplete={completeSetup} onSaveProfile={saveProfileToDB} onDeleteProfile={deleteProfileFromDB} onBack={()=>setAppScreen("choose")}/>}
+        {tab===1&&<ShoppingOptions data={data} setData={setData} onComplete={()=>setTab(2)} onBack={()=>setTab(0)}/>}
+        {tab===2&&<CookingOptions  data={data} setData={setData} onComplete={completeCooking} onBack={()=>setTab(1)}/>}
+        {tab===3&&<StorageOptions  data={data} onBack={()=>setTab(2)}/>}
       </div>
     </>
   );
