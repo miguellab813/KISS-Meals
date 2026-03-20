@@ -940,7 +940,8 @@ function ExportBar({ sectionId, label, showFull, onFullExport, data }) {
 
 // ─── ERROR BOUNDARY ──────────────────────────────────────────────────────────
 
-class ErrorBoundary extends React.Component {
+const { Component } = React;
+class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(e) { return { error: e }; }
   componentDidCatch(e, info) { console.error('Screen crashed:', e, info); }
@@ -951,7 +952,7 @@ class ErrorBoundary extends React.Component {
           <div className="al ar" style={{marginTop:20}}>
             <span className="ai">⚠️</span>
             <div>
-              <strong>Something went wrong loading this screen.</strong><br/>
+              <strong>Something went wrong on this screen.</strong><br/>
               <span style={{fontSize:12,opacity:.8}}>{String(this.state.error?.message || this.state.error)}</span>
             </div>
           </div>
@@ -1791,10 +1792,10 @@ function OtherMealsLookup({ user, savedOtherMeals, onSave, onSkip }) {
 function ShoppingOptions({ data, setData, onComplete, onBack }) {
   const [activeUser, setActiveUser] = useState(0);
   const [bStep, setBStep]           = useState(0);
-  const [showList, setShowList]     = useState(false);
-  const [showPantry, setShowPantry] = useState(false);
-  const [pantryAmounts, setPantryAmounts] = useState({});  // { itemName: grams }
-  const [doingOtherMeals, setDoingOtherMeals] = useState(true);
+  const [pantryAmounts, setPantryAmounts] = useState({});
+  // Single screen state — no more conflicting booleans
+  // 'othermeal' | 'builder' | 'pantry' | 'list'
+  const [screen, setScreen] = useState('othermeal');
 
   // Package size options in oz → converted to grams
   const PACKAGE_SIZES_OZ = [8, 12, 16, 24, 32, 48, 64];
@@ -1817,15 +1818,13 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
   function saveOtherMeals(omData) {
     const users = data.users.map((u,i) => i===activeUser ? { ...u, otherMeals: omData } : u);
     setData({ ...data, users });
-    scrollToTop(); setDoingOtherMeals(false);
-    setBStep(0);
+    scrollToTop(); setBStep(0); setScreen("builder");
   }
 
   function skipOtherMeals() {
     const users = data.users.map((u,i) => i===activeUser ? { ...u, otherMeals: null } : u);
     setData({ ...data, users });
-    scrollToTop();setDoingOtherMeals(false);
-    setBStep(0);
+    scrollToTop(); setBStep(0); setScreen("builder");
   }
 
   function nextUser() {
@@ -1833,9 +1832,9 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
     if (activeUser < data.users.length - 1) {
       setActiveUser(activeUser + 1);
       setBStep(0);
-      setDoingOtherMeals(true);
+      setScreen("othermeal");
     } else {
-      setShowPantry(true);
+      setScreen("pantry");
     }
   }
 
@@ -1844,13 +1843,13 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
     setActiveUser(i);
     setBStep(0);
     const u = data.users[i];
-    setDoingOtherMeals(!("otherMeals" in u));
+    setScreen("otherMeals" in u ? "builder" : "othermeal");
   }
 
   const allDone = data.users.every(u => u.meal?.protein && u.meal?.carb);
 
   // ── Other meals flow ──
-  if (doingOtherMeals) {
+  if (screen === "othermeal") {
     return (
       <OtherMealsLookup
         user={user}
@@ -1862,7 +1861,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
   }
 
   // ── Pantry check ──
-  if (showPantry) {
+  if (screen === "pantry") {
     const rawShop = calcRawWeights(data.users, data.round?.days||5);
     return (
       <div className="page">
@@ -1913,22 +1912,22 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
             </div>
           );
         })}
-        <button className="btn bp" onClick={()=>{ setShowPantry(false); scrollToTop();setShowList(true); }}>
+        <button className="btn bp" onClick={()=>{ scrollToTop(); setScreen("list"); }}>
           ✓ Apply & View Final List →
         </button>
-        <button className="btn bg" onClick={()=>setShowPantry(false)}>← Skip / No Deductions</button>
+        <button className="btn bg" onClick={()=>setScreen("builder")}>← Skip / No Deductions</button>
       </div>
     );
   }
 
   // ── Shopping list ──
-  if (showList) {
+  if (screen === "list") {
     // Safety check
     if (!allDone) {
       return (
         <div className="page">
           <div className="al ar"><span className="ai">⚠️</span><span>Some users are missing a protein or carb selection. Go back and complete all meal selections.</span></div>
-          <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Back to Meal Builder</button>
+          <button className="btn bg" onClick={()=>{ scrollToTop(); setActiveUser(0); setBStep(0); setScreen("builder"); }}>← Back to Meal Builder</button>
         </div>
       );
     }
@@ -1941,7 +1940,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
       return (
         <div className="page">
           <div className="al ar"><span className="ai">⚠️</span><span>Could not calculate shopping amounts. Please go back and re-confirm meal selections.</span></div>
-          <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Back to Meal Builder</button>
+          <button className="btn bg" onClick={()=>{ scrollToTop(); setActiveUser(0); setBStep(0); setScreen("builder"); }}>← Back to Meal Builder</button>
         </div>
       );
     }
@@ -2041,7 +2040,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
           })}
         </div>
         <button className="btn bp" onClick={onComplete}>Continue to Cooking →</button>
-        <button className="btn bg" onClick={()=>{ setShowList(false); setShowPantry(false); setActiveUser(0); setBStep(0); setDoingOtherMeals(true); }}>← Edit Meals</button>
+        <button className="btn bg" onClick={()=>{ scrollToTop(); setActiveUser(0); setBStep(0); setScreen("othermeal"); }}>← Edit Meals</button>
         {onBack && <button className="btn bg" style={{marginTop:6}} onClick={onBack}>← Back to Setup</button>}
       </div>
     );
@@ -2052,7 +2051,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
     return (
       <div className="page">
         <div className="al ar"><span className="ai">⚠️</span><span>No users found. Go back to Setup and add at least one user profile.</span></div>
-        <button className="btn bg" onClick={()=>{ setActiveUser(0); setBStep(0); scrollToTop();setDoingOtherMeals(false); }}>← Refresh</button>
+        <button className="btn bg" onClick={()=>{ setActiveUser(0); setBStep(0); scrollToTop(); setScreen("othermeal"); }}>← Refresh</button>
       </div>
     );
   }
@@ -2180,7 +2179,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
                     </div>
                   </div>
                 )}
-                <button className="btn bg bsm" style={{marginTop:14}} onClick={()=>setDoingOtherMeals(true)}>Update Other Meals</button>
+                <button className="btn bg bsm" style={{marginTop:14}} onClick={()=>{ scrollToTop(); setScreen("othermeal"); }}>Update Other Meals</button>
               </div>
             );
           })()}
