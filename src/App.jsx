@@ -450,6 +450,14 @@ function estimateTDEE(gender, weightLbs, age, activity) {
 
 function initMeal() { return { protein: null, carb: null, veggie: null, _noVeg: false }; }
 
+// Scroll to top of page on every screen transition (critical for mobile)
+function scrollToTop() {
+  // Try the .page div first (main scroll container), then window
+  const page = document.querySelector('.page');
+  if (page) page.scrollIntoView({ block: 'start', behavior: 'instant' });
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 
 const S = `
@@ -463,13 +471,43 @@ const S = `
     --grn:#00e676;--red:#ff1744;--ylw:#ffea00;
     --txt:#ffffff;--txt2:#dddddd;--muted:#909090;
     --fd:'Bebas Neue',sans-serif;--fb:'DM Sans',sans-serif;
+    --safe-top:env(safe-area-inset-top,0px);
+    --safe-bot:env(safe-area-inset-bottom,0px);
+    --safe-l:env(safe-area-inset-left,0px);
+    --safe-r:env(safe-area-inset-right,0px);
   }
 
-  body{background:var(--bg);color:var(--txt);font-family:var(--fb);-webkit-font-smoothing:antialiased}
-  .app{min-height:100vh;max-width:500px;margin:0 auto;padding-bottom:100px}
+  /* ── RESET & BASE ── */
+  html{height:-webkit-fill-available}
+  body{
+    background:var(--bg);color:var(--txt);font-family:var(--fb);
+    -webkit-font-smoothing:antialiased;
+    /* Prevent iOS text-size adjust on rotation */
+    -webkit-text-size-adjust:100%;
+    /* Prevent pull-to-refresh rubberbanding interfering with scroll */
+    overscroll-behavior-y:contain;
+    min-height:100vh;min-height:-webkit-fill-available;
+  }
+  /* Prevent double-tap zoom on interactive elements */
+  button,a,.pill,.oc,.hi,.nt{touch-action:manipulation}
+  /* Prevent iOS callout on long press of non-text */
+  .card,.oc,.pill,.btn,.hi{-webkit-user-select:none;user-select:none}
 
-  /* HEADER */
-  .hdr{background:#0a1a0e;border-bottom:2px solid #2d6a35;padding:14px 20px 12px;position:sticky;top:0;z-index:100}
+  .app{
+    min-height:100vh;max-width:500px;margin:0 auto;
+    /* Extra padding at bottom for home indicator bar */
+    padding-bottom:calc(90px + var(--safe-bot));
+  }
+
+  /* ── HEADER ── */
+  .hdr{
+    background:#0a1a0e;border-bottom:2px solid #2d6a35;
+    padding:14px 20px 12px;
+    padding-top:calc(14px + var(--safe-top));
+    padding-left:calc(20px + var(--safe-l));
+    padding-right:calc(20px + var(--safe-r));
+    position:sticky;top:0;z-index:100;
+  }
   .hdr-row{display:flex;align-items:center;justify-content:space-between}
   .logo-img{height:52px;width:auto;display:block;object-fit:contain;filter:drop-shadow(0 0 6px rgba(0,0,0,.5))}
   .logo-sub{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:3px}
@@ -477,160 +515,222 @@ const S = `
   .hdr-info .days{font-family:var(--fd);font-size:20px;color:var(--acc);line-height:1}
   .hdr-info .sub{font-size:10px;color:var(--muted)}
 
-  /* NAV */
-  .nav{display:flex;background:#000;border-bottom:1px solid var(--bdr);position:sticky;top:66px;z-index:99}
-  .nt{flex:1;cursor:pointer;border-bottom:3px solid transparent;transition:border-color .2s;position:relative}
-  .nt.locked{opacity:.28;cursor:not-allowed}
+  /* ── NAV TABS ── */
+  .nav{
+    display:flex;background:#000;border-bottom:1px solid var(--bdr);
+    position:sticky;top:66px;z-index:99;
+    padding-left:var(--safe-l);padding-right:var(--safe-r);
+  }
+  /* Bigger tap target — full height clickable */
+  .nt{flex:1;cursor:pointer;border-bottom:3px solid transparent;transition:border-color .15s;position:relative;-webkit-tap-highlight-color:transparent}
+  .nt.locked{opacity:.28;cursor:not-allowed;pointer-events:none}
   .nt.active{border-bottom-color:var(--acc)}
   .nt.done{border-bottom-color:var(--grn)}
   .nt.next{border-bottom-color:var(--ylw)}
-  .nt-in{padding:10px 4px;text-align:center}
-  .nt-icon{font-size:17px;display:block}
-  .nt-lbl{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-top:2px;color:var(--muted)}
+  /* Generous tap zone */
+  .nt-in{padding:12px 4px;text-align:center;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .nt-icon{font-size:18px;display:block}
+  .nt-lbl{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-top:3px;color:var(--muted)}
   .nt.active .nt-lbl{color:var(--acc)}
   .nt.done  .nt-lbl{color:var(--grn)}
   .nt.next  .nt-lbl{color:var(--ylw)}
-  .nt-dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--ylw);animation:pulse 1.5s infinite}
+  .nt-dot{position:absolute;top:7px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--ylw);animation:pulse 1.5s infinite}
   .nt.done .nt-dot{background:var(--grn);animation:none}
   .nt.active .nt-dot{display:none}
   @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.35)}}
 
-  /* CONTENT */
-  .page{padding:20px}
+  /* ── PAGE CONTENT ── */
+  .page{
+    padding:20px;
+    padding-left:calc(20px + var(--safe-l));
+    padding-right:calc(20px + var(--safe-r));
+  }
   .pt{font-family:var(--fd);font-size:34px;letter-spacing:2px;color:#fff;line-height:1.1;margin-bottom:4px}
   .pt span{color:var(--acc)}
-  .ps{font-size:14px;color:var(--txt2);margin-bottom:22px;line-height:1.5}
+  .ps{font-size:15px;color:var(--txt2);margin-bottom:22px;line-height:1.55}
 
-  /* BANNER */
-  .banner{background:rgba(255,234,0,.07);border:1.5px solid rgba(255,234,0,.35);border-radius:10px;padding:12px 15px;margin-bottom:18px;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;color:var(--ylw)}
+  /* ── BANNER ── */
+  .banner{background:rgba(255,234,0,.07);border:1.5px solid rgba(255,234,0,.35);border-radius:12px;padding:13px 15px;margin-bottom:18px;display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--ylw)}
 
-  /* CARD */
-  .card{background:var(--surf2);border:1px solid var(--bdr);border-radius:12px;padding:16px;margin-bottom:14px}
+  /* ── CARD ── */
+  .card{background:var(--surf2);border:1px solid var(--bdr);border-radius:14px;padding:16px;margin-bottom:14px}
   .ct{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
 
-  /* INPUTS */
-  .lbl{font-size:12px;font-weight:600;color:var(--txt2);margin-bottom:6px;display:block}
-  .inp{width:100%;background:var(--surf3);border:1.5px solid var(--bdr2);border-radius:8px;padding:13px 14px;color:#fff;font-family:var(--fb);font-size:15px;outline:none;transition:border-color .2s;margin-bottom:12px}
-  .inp:focus{border-color:var(--acc)}
+  /* ── INPUTS ── */
+  .lbl{font-size:13px;font-weight:600;color:var(--txt2);margin-bottom:7px;display:block}
+  .inp{
+    width:100%;background:var(--surf3);border:1.5px solid var(--bdr2);
+    border-radius:10px;padding:15px 14px;color:#fff;
+    font-family:var(--fb);
+    /* 16px minimum prevents iOS auto-zoom on focus */
+    font-size:16px;
+    outline:none;transition:border-color .2s;margin-bottom:12px;
+    /* iOS styling reset */
+    -webkit-appearance:none;appearance:none;
+  }
+  .inp:focus{border-color:var(--acc);background:var(--surf2)}
   .inp::placeholder{color:var(--muted)}
   .inp[disabled]{background:#111;color:var(--muted);cursor:not-allowed;border-color:var(--bdr)}
   .ig{display:flex;gap:10px}
   .ig>div{flex:1}
 
-  /* BUTTONS */
-  .btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:15px 20px;border-radius:10px;font-family:var(--fb);font-size:14px;font-weight:700;cursor:pointer;border:none;transition:all .15s;width:100%;margin-top:10px}
+  /* ── BUTTONS ── */
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    /* 52px min height = comfortable thumb tap */
+    padding:16px 20px;min-height:52px;
+    border-radius:12px;font-family:var(--fb);font-size:15px;font-weight:700;
+    cursor:pointer;border:none;
+    /* Instant feedback — no hover delay on mobile */
+    transition:opacity .1s,transform .1s;
+    width:100%;margin-top:10px;
+    /* Remove iOS button styling */
+    -webkit-appearance:none;appearance:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .btn:active:not(:disabled){opacity:.75;transform:scale(.98)}
   .btn:disabled{opacity:.28;cursor:not-allowed;transform:none!important}
   .bp{background:var(--acc);color:#fff}
-  .bp:not(:disabled):hover{background:#ff6a1f;transform:translateY(-1px)}
   .bs{background:var(--surf3);color:#fff;border:1.5px solid var(--bdr2)}
-  .bs:not(:disabled):hover{border-color:var(--acc)}
   .bg{background:transparent;color:var(--muted);border:1.5px solid var(--bdr)}
-  .bg:not(:disabled):hover{color:#fff;border-color:var(--bdr2)}
-  .bsm{padding:9px 14px;font-size:12px;width:auto;margin-top:0}
+  /* Small button variant */
+  .bsm{padding:11px 16px;font-size:13px;width:auto;margin-top:0;min-height:44px}
 
-  /* PILLS */
+  /* ── PILLS ── */
   .pg{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
-  .pill{padding:9px 14px;border-radius:100px;font-size:12px;font-weight:600;border:1.5px solid var(--bdr2);background:var(--surf3);color:var(--txt2);cursor:pointer;transition:all .15s}
-  .pill:hover{border-color:var(--acc);color:#fff}
+  .pill{
+    padding:10px 16px;border-radius:100px;font-size:13px;font-weight:600;
+    border:1.5px solid var(--bdr2);background:var(--surf3);color:var(--txt2);
+    cursor:pointer;
+    /* 44px min height for thumb */
+    min-height:44px;display:inline-flex;align-items:center;
+    -webkit-tap-highlight-color:transparent;
+    transition:border-color .1s,background .1s;
+  }
+  .pill:active{opacity:.7}
   .pill.on{border-color:var(--acc);background:rgba(255,77,0,.15);color:#fff}
 
-  /* OPTION CARDS */
-  .oc{background:var(--surf3);border:1.5px solid var(--bdr2);border-radius:10px;padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:all .15s;display:flex;align-items:flex-start;gap:12px}
-  .oc:hover{border-color:#555}
+  /* ── OPTION CARDS ── */
+  .oc{
+    background:var(--surf3);border:1.5px solid var(--bdr2);
+    border-radius:12px;padding:16px;margin-bottom:10px;
+    cursor:pointer;display:flex;align-items:flex-start;gap:14px;
+    -webkit-tap-highlight-color:transparent;
+    transition:border-color .1s,background .1s;
+    /* Generous touch target */
+    min-height:60px;
+  }
+  .oc:active{background:rgba(255,255,255,.04)}
   .oc.sel{border-color:var(--acc);background:rgba(255,77,0,.09)}
-  .or{width:20px;height:20px;border-radius:50%;border:2px solid var(--bdr2);flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+  .or{width:22px;height:22px;border-radius:50%;border:2px solid var(--bdr2);flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;transition:all .15s}
   .oc.sel .or{border-color:var(--acc);background:var(--acc)}
-  .oc.sel .or::after{content:'';width:7px;height:7px;border-radius:50%;background:#fff}
+  .oc.sel .or::after{content:'';width:8px;height:8px;border-radius:50%;background:#fff}
   .ob{flex:1}
-  .on2{font-size:15px;font-weight:700;color:#fff}
-  .om{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.5}
+  .on2{font-size:16px;font-weight:700;color:#fff}
+  .om{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5}
 
-  /* MACROS */
+  /* ── MACROS ── */
   .mr{display:flex;gap:8px;margin-bottom:12px}
-  .mc{flex:1;background:var(--surf3);border:1px solid var(--bdr2);border-radius:8px;padding:10px 6px;text-align:center}
+  .mc{flex:1;background:var(--surf3);border:1px solid var(--bdr2);border-radius:10px;padding:12px 6px;text-align:center}
   .mc .v{font-family:var(--fd);font-size:22px;color:#fff;line-height:1}
   .mc .l{font-size:9px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-top:3px}
   .mc.hl{border-color:var(--acc)}
   .mc.hl .v{color:var(--acc)}
 
-  /* ALERTS */
-  .al{border-radius:10px;padding:13px 15px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.55}
+  /* ── ALERTS ── */
+  .al{border-radius:12px;padding:14px 15px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.55}
   .ar{background:rgba(255,23,68,.1);border:1px solid rgba(255,23,68,.4);color:#ff8099}
   .ag{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);color:var(--grn)}
   .ao{background:rgba(255,140,0,.1);border:1px solid rgba(255,140,0,.35);color:var(--acc2)}
   .ay{background:rgba(255,234,0,.07);border:1px solid rgba(255,234,0,.3);color:var(--ylw)}
-  .ai{font-size:18px;flex-shrink:0;margin-top:1px}
+  .ai{font-size:20px;flex-shrink:0;margin-top:1px}
 
-  /* USER ROW */
-  .ur{display:flex;align-items:center;gap:12px;padding:12px;background:var(--surf3);border-radius:10px;margin-bottom:8px;border:1px solid var(--bdr2)}
-  .uav{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));display:flex;align-items:center;justify-content:center;font-family:var(--fd);font-size:18px;color:#fff;flex-shrink:0}
+  /* ── USER ROW ── */
+  .ur{display:flex;align-items:center;gap:12px;padding:14px;background:var(--surf3);border-radius:12px;margin-bottom:8px;border:1px solid var(--bdr2)}
+  .uav{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));display:flex;align-items:center;justify-content:center;font-family:var(--fd);font-size:20px;color:#fff;flex-shrink:0}
   .ui{flex:1;min-width:0}
-  .un{font-size:14px;font-weight:700;color:#fff}
-  .usb{font-size:11px;color:var(--muted);margin-top:2px}
+  .un{font-size:15px;font-weight:700;color:#fff}
+  .usb{font-size:12px;color:var(--muted);margin-top:2px}
 
-  /* STEPS */
+  /* ── STEP DOTS ── */
   .stps{display:flex;align-items:center;margin-bottom:22px}
-  .sd{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:var(--surf3);border:2px solid var(--bdr2);color:var(--muted);transition:all .2s}
+  .sd{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:var(--surf3);border:2px solid var(--bdr2);color:var(--muted);transition:all .2s}
   .sd.act{background:var(--acc);border-color:var(--acc);color:#fff}
-  .sd.dn{background:var(--grn);border-color:var(--grn);color:#000;font-size:14px}
+  .sd.dn{background:var(--grn);border-color:var(--grn);color:#000;font-size:15px}
   .sl{flex:1;height:2px;background:var(--bdr2);margin:0 4px;transition:background .2s}
   .sl.dn{background:var(--grn)}
 
-  /* SHOP */
+  /* ── SHOPPING ── */
   .shr{padding:14px 0;border-bottom:1px solid var(--bdr);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
   .shr:last-child{border-bottom:none}
   .shn{font-size:15px;font-weight:700;color:#fff}
-  .shp{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.65}
+  .shp{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.65}
   .shw{text-align:right;flex-shrink:0}
   .shb{font-family:var(--fd);font-size:24px;color:var(--acc);line-height:1}
   .sho{font-size:12px;color:var(--txt2);margin-top:1px}
 
-  /* INSTR */
-  .inb{background:#111;border-left:3px solid var(--acc);border-radius:8px;padding:14px;margin-top:10px}
+  /* ── COOKING INSTRUCTIONS ── */
+  .inb{background:#111;border-left:3px solid var(--acc);border-radius:10px;padding:14px;margin-top:10px}
   .inc{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
-  .ich{padding:4px 10px;background:rgba(255,77,0,.12);border-radius:6px;font-size:11px;font-weight:700;color:var(--acc)}
-  .int{font-size:13px;color:var(--txt2);line-height:1.65}
+  .ich{padding:5px 12px;background:rgba(255,77,0,.12);border-radius:6px;font-size:12px;font-weight:700;color:var(--acc)}
+  .int{font-size:14px;color:var(--txt2);line-height:1.65}
 
-  /* PORTION TABLE */
+  /* ── PORTION TABLE ── */
   .pt2{width:100%;border-collapse:collapse;margin-top:8px}
-  .pt2 th{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:8px 0;text-align:left;border-bottom:1px solid var(--bdr)}
-  .pt2 td{padding:10px 0;font-size:13px;color:var(--txt2);border-bottom:1px solid var(--bdr)}
+  .pt2 th{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:10px 0;text-align:left;border-bottom:1px solid var(--bdr)}
+  .pt2 td{padding:12px 0;font-size:14px;color:var(--txt2);border-bottom:1px solid var(--bdr)}
   .pt2 tr:last-child td{border-bottom:none}
-  .pv{font-family:var(--fd);font-size:20px;color:var(--acc)}
-  .pv2{font-family:var(--fd);font-size:20px;color:var(--acc2)}
+  .pv{font-family:var(--fd);font-size:22px;color:var(--acc)}
+  .pv2{font-family:var(--fd);font-size:22px;color:var(--acc2)}
   .pu{font-size:11px;color:var(--muted);margin-left:3px}
 
-  /* LABEL */
-  .lp{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:10px;border:2px dashed #bbb}
-  .lpn{font-family:var(--fd);font-size:24px;color:#111;letter-spacing:1px}
-  .lpr{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
-  .lpi{font-size:12px;color:#555}
+  /* ── CONTAINER LABELS ── */
+  .lp{background:#fff;border-radius:12px;padding:14px 16px;margin-bottom:10px;border:2px dashed #bbb}
+  .lpn{font-family:var(--fd);font-size:26px;color:#111;letter-spacing:1px}
+  .lpr{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+  .lpi{font-size:13px;color:#555}
   .lpi b{color:#111}
 
-  /* HISTORY */
-  .hi{display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--surf3);border-radius:10px;margin-bottom:8px;border:1px solid var(--bdr2);cursor:pointer;transition:border-color .15s}
-  .hi:hover{border-color:var(--acc)}
+  /* ── HISTORY ROWS ── */
+  .hi{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px;background:var(--surf3);border-radius:12px;
+    margin-bottom:8px;border:1px solid var(--bdr2);cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+    min-height:56px;
+  }
+  .hi:active{background:var(--surf2)}
 
-  /* AUTH SCREEN */
-  .auth-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
-  .auth-card{width:100%;max-width:380px;background:var(--surf2);border:1px solid var(--bdr);border-radius:16px;padding:28px 24px}
+  /* ── AUTH SCREEN ── */
+  .auth-wrap{
+    min-height:100vh;min-height:-webkit-fill-available;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:24px;padding-bottom:calc(24px + var(--safe-bot));
+    background:var(--bg);
+  }
+  .auth-card{width:100%;max-width:400px;background:var(--surf2);border:1px solid var(--bdr);border-radius:20px;padding:32px 24px}
   .auth-logo{display:flex;justify-content:center;margin-bottom:20px}
   .auth-logo img{height:80px;width:auto;filter:drop-shadow(0 0 8px rgba(0,0,0,.6))}
   .auth-title{font-family:var(--fd);font-size:28px;text-align:center;color:#fff;letter-spacing:1px;margin-bottom:4px}
   .auth-sub{font-size:12px;color:var(--muted);text-align:center;margin-bottom:22px;letter-spacing:2px;text-transform:uppercase}
-  .auth-tabs{display:flex;gap:0;margin-bottom:20px;background:var(--surf3);border-radius:8px;padding:3px}
-  .auth-tab{flex:1;padding:9px;text-align:center;font-size:13px;font-weight:600;border-radius:6px;cursor:pointer;color:var(--muted);transition:all .15s}
+  .auth-tabs{display:flex;gap:0;margin-bottom:20px;background:var(--surf3);border-radius:10px;padding:3px}
+  .auth-tab{flex:1;padding:11px;text-align:center;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;color:var(--muted);transition:all .15s;min-height:44px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
   .auth-tab.active{background:var(--acc);color:#fff}
-  .auth-err{background:rgba(255,23,68,.1);border:1px solid rgba(255,23,68,.4);color:#ff8099;border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:12px}
-  .auth-ok{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);color:var(--grn);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:12px}
-  .signout-btn{font-size:11px;font-weight:700;color:var(--muted);background:transparent;border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;cursor:pointer;letter-spacing:.5px;transition:all .15s}
-  .signout-btn:hover{color:#fff;border-color:var(--bdr2)}
-  /* MISC */
+  .auth-err{background:rgba(255,23,68,.1);border:1px solid rgba(255,23,68,.4);color:#ff8099;border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:12px}
+  .auth-ok{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.3);color:var(--grn);border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:12px}
+  .signout-btn{font-size:12px;font-weight:700;color:var(--muted);background:transparent;border:1px solid var(--bdr);border-radius:8px;padding:7px 12px;cursor:pointer;letter-spacing:.5px;-webkit-tap-highlight-color:transparent;min-height:36px}
+  .signout-btn:active{opacity:.6}
+
+  /* ── MISC ── */
   .div{height:1px;background:var(--bdr);margin:14px 0}
-  input[type=range]{width:100%;accent-color:var(--acc);cursor:pointer}
-  textarea.inp{resize:vertical;min-height:80px;line-height:1.5}
-  ::-webkit-scrollbar{width:4px}
-  ::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:4px}
+  input[type=range]{
+    width:100%;accent-color:var(--acc);cursor:pointer;
+    /* Bigger track for thumb */
+    height:28px;
+  }
+  textarea.inp{resize:none;min-height:88px;line-height:1.55}
+  /* Hide scrollbar on mobile (still scrollable) */
+  ::-webkit-scrollbar{width:0;height:0}
 
   /* EXPORT BUTTON */
   .export-bar{display:flex;gap:8px;margin:18px 0 4px;flex-wrap:wrap}
@@ -930,10 +1030,10 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
     // Save to Supabase if handler provided
     if (onSaveProfile) u = await onSaveProfile(u);
     const users = editing ? data.users.map(x=>x.id===u.id?u:x) : [...data.users,u];
-    setData({ ...data, users }); setView("home");
+    setData({ ...data, users }); scrollToTop(); setView("home");
   }
 
-  function saveRound() { setData({ ...data, round: rf }); setView("home"); }
+  function saveRound() { setData({ ...data, round: rf }); scrollToTop(); setView("home"); }
 
   // ── Round view ──
   if (view==="cycle") {
@@ -1020,7 +1120,7 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
         })()}
 
         <button className="btn bp" onClick={saveRound}>✓ Confirm Cycle</button>
-        <button className="btn bg" onClick={()=>setView("home")}>← Back</button>
+        <button className="btn bg" onClick={()=>{scrollToTop();setView("home")}}>← Back</button>
       </div>
     );
   }
@@ -1066,8 +1166,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
             = <strong style={{color:"var(--acc)"}}>{(+f.days||0)*(+f.mealsPerDay||0)}</strong> total containers for {f.name||"this user"}
           </div>
         </div>
-        <button className="btn bp" disabled={!f.name||!f.age||!f.gender||!f.days||!f.mealsPerDay} onClick={()=>setPStep(1)}>Next →</button>
-        <button className="btn bg" onClick={()=>setView("home")}>Cancel</button>
+        <button className="btn bp" disabled={!f.name||!f.age||!f.gender||!f.days||!f.mealsPerDay} onClick={()=>{scrollToTop();setPStep(1)}}>Next →</button>
+        <button className="btn bg" onClick={()=>{scrollToTop();setView("home")}}>Cancel</button>
       </div>
     );
 
@@ -1090,8 +1190,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
             <div className="om">We'll estimate your TDEE and build targets based on your body & goal</div>
           </div>
         </div>
-        <button className="btn bp" disabled={!f.macroMode} onClick={()=>setPStep(2)}>Next →</button>
-        <button className="btn bg" onClick={()=>setPStep(0)}>← Back</button>
+        <button className="btn bp" disabled={!f.macroMode} onClick={()=>{scrollToTop();setPStep(2)}}>Next →</button>
+        <button className="btn bg" onClick={()=>{scrollToTop();setPStep(0)}}>← Back</button>
       </div>
     );
 
@@ -1117,8 +1217,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
             </div>
           )}
         </div>
-        <button className="btn bp" disabled={!f.protein||!f.carbs||!f.fat} onClick={()=>setPStep(3)}>Next →</button>
-        <button className="btn bg" onClick={()=>setPStep(1)}>← Back</button>
+        <button className="btn bp" disabled={!f.protein||!f.carbs||!f.fat} onClick={()=>{scrollToTop();setPStep(3)}}>Next →</button>
+        <button className="btn bg" onClick={()=>{scrollToTop();setPStep(1)}}>← Back</button>
       </div>
     );
 
@@ -1141,8 +1241,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
               <div className="or"/><div className="ob"><div className="on2">{a.label}</div><div className="om">{a.desc}</div></div>
             </div>
           ))}
-          <button className="btn bp" disabled={!f.activity} onClick={()=>setGStep(1)}>Next →</button>
-          <button className="btn bg" onClick={()=>setPStep(1)}>← Back</button>
+          <button className="btn bp" disabled={!f.activity} onClick={()=>{scrollToTop();setGStep(1)}}>Next →</button>
+          <button className="btn bg" onClick={()=>{scrollToTop();setPStep(1)}}>← Back</button>
         </div>
       );
 
@@ -1164,8 +1264,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
               </div>
             )}
           </div>
-          <button className="btn bp" disabled={!f.weight} onClick={()=>setGStep(2)}>Next →</button>
-          <button className="btn bg" onClick={()=>setGStep(0)}>← Back</button>
+          <button className="btn bp" disabled={!f.weight} onClick={()=>{scrollToTop();setGStep(2)}}>Next →</button>
+          <button className="btn bg" onClick={()=>{scrollToTop();setGStep(0)}}>← Back</button>
         </div>
       );
 
@@ -1190,8 +1290,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
               <span>Daily calorie target: <strong style={{color:"#fff"}}>{calGoal} kcal</strong></span>
             </div>
           )}
-          <button className="btn bp" disabled={!f.goal} onClick={()=>setGStep(3)}>Next →</button>
-          <button className="btn bg" onClick={()=>setGStep(1)}>← Back</button>
+          <button className="btn bp" disabled={!f.goal} onClick={()=>{scrollToTop();setGStep(3)}}>Next →</button>
+          <button className="btn bg" onClick={()=>{scrollToTop();setGStep(1)}}>← Back</button>
         </div>
       );
 
@@ -1235,8 +1335,8 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
             </div>
           )}
 
-          <button className="btn bp" disabled={!f.proteinG||remaining<=0} onClick={()=>setPStep(3)}>Next — Dietary Restrictions →</button>
-          <button className="btn bg" onClick={()=>setGStep(2)}>← Back</button>
+          <button className="btn bp" disabled={!f.proteinG||remaining<=0} onClick={()=>{scrollToTop();setPStep(3)}}>Next — Dietary Restrictions →</button>
+          <button className="btn bg" onClick={()=>{scrollToTop();setGStep(2)}}>← Back</button>
         </div>
       );
     }
@@ -1269,7 +1369,7 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
             </div>
           </div>
           <button className="btn bp" onClick={saveUser}>{isEdit?"💾 Save Changes":"➕ Add User"}</button>
-          <button className="btn bg" onClick={()=>setPStep(2)}>← Back</button>
+          <button className="btn bg" onClick={()=>{scrollToTop();setPStep(2)}}>← Back</button>
         </div>
       );
     }
@@ -1316,7 +1416,7 @@ function UserSetup({ data, setData, onComplete, onSaveProfile, onDeleteProfile, 
         ))}
       </div>
 
-      <div className="card" style={{cursor:"pointer",border:data.round?"1px solid var(--bdr)":"1.5px solid rgba(255,77,0,.5)"}} onClick={()=>setView("cycle")}>
+      <div className="card" style={{cursor:"pointer",border:data.round?"1px solid var(--bdr)":"1.5px solid rgba(255,77,0,.5)"}} onClick={()=>{scrollToTop();setView("cycle")}}>
         <div className="ct">PREP CYCLE</div>
         {data.round?(
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -1445,7 +1545,16 @@ function OtherMealsLookup({ user, savedOtherMeals, onSave, onSkip }) {
         if (!count) return;
         const food = FOOD_DB_FLAT.find(f => f.id === id);
         if (!food) return;
-        items.push({ meal: slot.charAt(0).toUpperCase()+slot.slice(1), name: food.name, serving: food.serving, count });
+        items.push({
+          meal:    slot.charAt(0).toUpperCase()+slot.slice(1),
+          name:    food.name,
+          serving: food.serving,
+          count,
+          cals:    food.cals,
+          protein: food.protein,
+          carbs:   food.carbs,
+          fat:     food.fat,
+        });
       });
     });
 
@@ -1681,31 +1790,32 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
   function saveOtherMeals(omData) {
     const users = data.users.map((u,i) => i===activeUser ? { ...u, otherMeals: omData } : u);
     setData({ ...data, users });
-    setDoingOtherMeals(false);
+    scrollToTop(); setDoingOtherMeals(false);
     setBStep(0);
   }
 
   function skipOtherMeals() {
     const users = data.users.map((u,i) => i===activeUser ? { ...u, otherMeals: null } : u);
     setData({ ...data, users });
-    setDoingOtherMeals(false);
+    scrollToTop();setDoingOtherMeals(false);
     setBStep(0);
   }
 
   function nextUser() {
+    scrollToTop();
     if (activeUser < data.users.length - 1) {
       setActiveUser(activeUser + 1);
       setBStep(0);
       setDoingOtherMeals(true);
     } else {
-      setShowPantry(true); // pantry check before shopping list
+      setShowPantry(true);
     }
   }
 
   function switchUser(i) {
+    scrollToTop();
     setActiveUser(i);
     setBStep(0);
-    // If that user already has otherMeals set (even null explicitly), skip directly to builder
     const u = data.users[i];
     setDoingOtherMeals(!("otherMeals" in u));
   }
@@ -1776,7 +1886,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
             </div>
           );
         })}
-        <button className="btn bp" onClick={()=>{ setShowPantry(false); setShowList(true); }}>
+        <button className="btn bp" onClick={()=>{ setShowPantry(false); scrollToTop();setShowList(true); }}>
           ✓ Apply & View Final List →
         </button>
         <button className="btn bg" onClick={()=>setShowPantry(false)}>← Skip / No Deductions</button>
@@ -1893,7 +2003,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
     return (
       <div className="page">
         <div className="al ar"><span className="ai">⚠️</span><span>No users found. Go back to Setup and add at least one user profile.</span></div>
-        <button className="btn bg" onClick={()=>{ setActiveUser(0); setBStep(0); setDoingOtherMeals(false); }}>← Refresh</button>
+        <button className="btn bg" onClick={()=>{ setActiveUser(0); setBStep(0); scrollToTop();setDoingOtherMeals(false); }}>← Refresh</button>
       </div>
     );
   }
@@ -1956,13 +2066,24 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
           {/* Other meals breakdown with full macro summary and math */}
           {user?.otherMeals?.items?.length > 0 && (()=>{
             const items = user.otherMeals.items;
-            // Sum macros of all "other meals" items
-            const omTotals = items.reduce((acc, item) => ({
-              cals:    Math.round(acc.cals    + (item.cals    * (item.count||1))),
-              protein: Math.round(acc.protein + (item.protein * (item.count||1))),
-              carbs:   Math.round(acc.carbs   + (item.carbs   * (item.count||1))),
-              fat:     Math.round(acc.fat     + (item.fat     * (item.count||1))),
-            }), {cals:0,protein:0,carbs:0,fat:0});
+            // Check if item-level macros exist (new saves) or fall back to dailyTotal (old saves)
+            const hasItemMacros = items.some(i => i.cals != null);
+
+            // If new format: sum from items. If old format: use the stored dailyTotal.
+            const omTotals = hasItemMacros
+              ? items.reduce((acc, item) => ({
+                  cals:    Math.round(acc.cals    + ((item.cals    || 0) * (item.count||1))),
+                  protein: Math.round(acc.protein + ((item.protein || 0) * (item.count||1))),
+                  carbs:   Math.round(acc.carbs   + ((item.carbs   || 0) * (item.count||1))),
+                  fat:     Math.round(acc.fat     + ((item.fat     || 0) * (item.count||1))),
+                }), {cals:0,protein:0,carbs:0,fat:0})
+              : {
+                  cals:    Math.round(user.otherMeals.dailyTotal?.cals    || 0),
+                  protein: Math.round(user.otherMeals.dailyTotal?.protein || 0),
+                  carbs:   Math.round(user.otherMeals.dailyTotal?.carbs   || 0),
+                  fat:     Math.round(user.otherMeals.dailyTotal?.fat     || 0),
+                };
+
             const daily = {
               cals:    Math.round(+user.cals    || 0),
               protein: Math.round(+user.protein || 0),
@@ -1974,31 +2095,35 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
                 <div className="ct">Other Meals Accounted For</div>
                 {/* Item list */}
                 {items.map((item,i)=>(
-                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--bdr)",fontSize:12}}>
-                    <div style={{color:"var(--txt2)"}}>{item.name} <span style={{color:"var(--muted)"}}>({item.meal})</span></div>
-                    <div style={{color:"var(--muted)",flexShrink:0,marginLeft:8,textAlign:"right"}}>
-                      {Math.round(item.cals*(item.count||1))} kcal · P:{Math.round(item.protein*(item.count||1))}g · C:{Math.round(item.carbs*(item.count||1))}g · F:{Math.round(item.fat*(item.count||1))}g
-                    </div>
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"7px 0",borderBottom:"1px solid var(--bdr)",fontSize:12}}>
+                    <div style={{color:"var(--txt2)"}}>{item.count > 1 ? `${item.count}× ` : ""}{item.name} <span style={{color:"var(--muted)"}}>({item.meal})</span></div>
+                    {item.cals != null
+                      ? <div style={{color:"var(--txt2)",flexShrink:0,marginLeft:8,textAlign:"right"}}>
+                          <div>{Math.round((item.cals||0)*(item.count||1))} kcal</div>
+                          <div style={{color:"var(--muted)"}}>P:{Math.round((item.protein||0)*(item.count||1))}g · C:{Math.round((item.carbs||0)*(item.count||1))}g · F:{Math.round((item.fat||0)*(item.count||1))}g</div>
+                        </div>
+                      : <div style={{color:"var(--muted)",flexShrink:0,marginLeft:8}}>tap Update to refresh</div>
+                    }
                   </div>
                 ))}
                 {/* Other meals subtotal */}
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid var(--bdr2)",fontSize:12,fontWeight:700}}>
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid var(--bdr2)",fontSize:12,fontWeight:700,marginTop:2}}>
                   <span style={{color:"var(--txt2)"}}>Other meals total</span>
                   <span style={{color:"var(--acc)"}}>{omTotals.cals} kcal · P:{omTotals.protein}g · C:{omTotals.carbs}g · F:{omTotals.fat}g</span>
                 </div>
-                {/* Math breakdown */}
+                {/* Math: daily − other meals = lunch target */}
                 {daily.cals > 0 && (
-                  <div style={{marginTop:10,fontSize:12,lineHeight:2}}>
-                    <div style={{display:"flex",justifyContent:"space-between",color:"var(--txt2)"}}>
+                  <div style={{marginTop:12,fontSize:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",color:"var(--txt2)"}}>
                       <span>Daily goal</span>
                       <span>{daily.cals} kcal · P:{daily.protein}g · C:{daily.carbs}g · F:{daily.fat}g</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",color:"var(--muted)"}}>
                       <span>− Other meals</span>
                       <span>{omTotals.cals} kcal · P:{omTotals.protein}g · C:{omTotals.carbs}g · F:{omTotals.fat}g</span>
                     </div>
-                    <div style={{height:1,background:"var(--bdr)",margin:"4px 0"}}/>
-                    <div style={{display:"flex",justifyContent:"space-between",fontWeight:700}}>
+                    <div style={{height:1,background:"var(--bdr2)",margin:"6px 0"}}/>
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontWeight:700}}>
                       <span style={{color:"var(--grn)"}}>= Lunch target</span>
                       <span style={{color:"var(--grn)"}}>
                         {Math.max(0,daily.cals-omTotals.cals)} kcal · P:{Math.max(0,daily.protein-omTotals.protein)}g · C:{Math.max(0,daily.carbs-omTotals.carbs)}g · F:{Math.max(0,daily.fat-omTotals.fat)}g
@@ -2006,12 +2131,12 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
                     </div>
                   </div>
                 )}
-                <button className="btn bg bsm" style={{marginTop:12}} onClick={()=>setDoingOtherMeals(true)}>Update Other Meals</button>
+                <button className="btn bg bsm" style={{marginTop:14}} onClick={()=>setDoingOtherMeals(true)}>Update Other Meals</button>
               </div>
             );
           })()}
 
-          <button className="btn bp" onClick={()=>setBStep(1)}>Pick Protein →</button>
+          <button className="btn bp" onClick={()=>{scrollToTop();setBStep(1)}}>Pick Protein →</button>
         </>
       )}
 
@@ -2053,7 +2178,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
           })()}
 
           {meal.protein&&meal.carb&&<MR {...calcMacros(meal, user)}/>}
-          <button className="btn bp" disabled={!meal.protein} onClick={()=>setBStep(2)}>Next — Pick Carb →</button>
+          <button className="btn bp" disabled={!meal.protein} onClick={()=>{scrollToTop();setBStep(2)}}>Next — Pick Carb →</button>
         </>
       )}
 
@@ -2075,7 +2200,7 @@ function ShoppingOptions({ data, setData, onComplete, onBack }) {
 
             </>
           )}
-          <button className="btn bp" disabled={!meal.carb} onClick={()=>setBStep(3)}>Next — Add Veggie →</button>
+          <button className="btn bp" disabled={!meal.carb} onClick={()=>{scrollToTop();setBStep(3)}}>Next — Add Veggie →</button>
         </>
       )}
 
@@ -2219,7 +2344,7 @@ function CookingOptions({ data, setData, onComplete, onBack }) {
           ))}
         </div>
       </div>
-      <button className="btn bp" disabled={equip.length===0} onClick={()=>setStep(1)}>Next — Dietary Check →</button>
+      <button className="btn bp" disabled={equip.length===0} onClick={()=>{scrollToTop();setStep(1)}}>Next — Dietary Check →</button>
       {onBack && <button className="btn bg" style={{marginTop:6}} onClick={onBack}>← Back to Shopping</button>}
     </div>
   );
@@ -2255,8 +2380,8 @@ function CookingOptions({ data, setData, onComplete, onBack }) {
           <div><strong>All Clear — Cook Everything Together</strong><br/>No restrictions detected. Batch all ingredients together.</div>
         </div>
       )}
-      <button className="btn bp" onClick={()=>setStep(2)}>Next — Cooking Instructions →</button>
-      <button className="btn bg" onClick={()=>setStep(0)}>← Back</button>
+      <button className="btn bp" onClick={()=>{scrollToTop();setStep(2)}}>Next — Cooking Instructions →</button>
+      <button className="btn bg" onClick={()=>{scrollToTop();setStep(0)}}>← Back</button>
     </div>
   );
 
@@ -2299,8 +2424,8 @@ function CookingOptions({ data, setData, onComplete, onBack }) {
           </div>
         );
       })}
-      <button className="btn bp" onClick={()=>setStep(3)}>Next — Portioning Guide →</button>
-      <button className="btn bg" onClick={()=>setStep(1)}>← Back</button>
+      <button className="btn bp" onClick={()=>{scrollToTop();setStep(3)}}>Next — Portioning Guide →</button>
+      <button className="btn bg" onClick={()=>{scrollToTop();setStep(1)}}>← Back</button>
     </div>
   );
 
@@ -2483,7 +2608,7 @@ function CookingOptions({ data, setData, onComplete, onBack }) {
       })}
 
       <button className="btn bp" onClick={finish}>Continue to Storage →</button>
-      <button className="btn bg" onClick={()=>setStep(2)}>← Back</button>
+      <button className="btn bg" onClick={()=>{scrollToTop();setStep(2)}}>← Back</button>
     </div>
   );
   }
@@ -2756,18 +2881,17 @@ export default function App() {
   // Reset to chooser on sign-out is handled via SIGNED_OUT event above
 
   function startNewCycle() {
-    // Clear meal selections but keep profiles; reset round
     setData(prev => ({
       ...prev,
       users: prev.users.map(u => ({ ...u, meal: initMeal(), otherMeals: undefined })),
       round: null, equipment: [], methodChoices: {},
     }));
+    scrollToTop();
     setTab(0);
     setAppScreen('active');
   }
 
   function loadPreviousCycle(cycle) {
-    // Restore a saved cycle snapshot into working data
     setData(prev => ({
       ...prev,
       users: cycle.users && cycle.users.length > 0 ? cycle.users : prev.users,
@@ -2775,6 +2899,7 @@ export default function App() {
       equipment: cycle.equipment || [],
       methodChoices: cycle.methodChoices || {},
     }));
+    scrollToTop();
     setTab(0);
     setAppScreen('active');
   }
@@ -2796,11 +2921,13 @@ export default function App() {
     const d = new Date().toLocaleDateString();
     const h = [{days:data.round.days,mealsPerDay:data.round.mealsPerDay,date:d},...(data.history||[])].slice(0,5);
     setData(p=>({...p,history:h}));
+    scrollToTop();
     setTab(1);
   }
 
   async function completeCooking() {
     await saveCycleToDB(data);
+    scrollToTop();
     setTab(3);
   }
 
@@ -2913,7 +3040,7 @@ export default function App() {
             const st = tabState(idx);
             const locked = st==="locked";
             return (
-              <div key={idx} className={`nt ${st}`} onClick={()=>!locked&&setTab(idx)}>
+              <div key={idx} className={`nt ${st}`} onClick={()=>{if(!locked){scrollToTop();setTab(idx)}}}>
                 <div className="nt-in">
                   <span className="nt-icon">{st==="done"?"✅":i}</span>
                   <div className="nt-lbl">{l}</div>
